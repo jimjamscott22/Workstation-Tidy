@@ -1,0 +1,2 @@
+include config.example.toml
+recursive-include docs *.md
