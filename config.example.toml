@@ -1,0 +1,26 @@
+version = 1
+
+[profiles.usual]
+# Omit cargo_targets to include the eight historical workstation output paths.
+# Alternatively specify selected outputs: cargo_targets = ["~/projects/app/target"]
+project_roots = ["~/Desktop/GitHub-Repos"]
+discover_cargo = false
+exclude = []
+review = true
+
+[profiles.usual.caches]
+npm = "~/.npm/_cacache"
+uv = "~/.cache/uv"
+pip = "~/.cache/pip"
+thumbnails = "~/.cache/thumbnails"
+imager = "~/.cache/Raspberry Pi/Imager"
+
+[profiles.desktop]
+cargo_targets = []
+project_roots = []
+discover_cargo = false
+review = false
+
+[profiles.desktop.caches]
+thumbnails = "~/.cache/thumbnails"
+imager = "~/.cache/Raspberry Pi/Imager"
