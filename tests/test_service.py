@@ -37,6 +37,34 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(records[0]["status"], "completed")
         self.assertNotIn("thumbnail" * 20, json.dumps(records))
 
+    def test_on_result_called_once_per_target_after_save(self):
+        seen = []
+
+        def record(result):
+            seen.append((result["target_id"], len(self.store.read()[0]["results"])))
+
+        clean(
+            [inspect(self.target)],
+            self.profile,
+            self.store,
+            processes=ProcessView,
+            on_result=record,
+        )
+        self.assertEqual(seen, [("thumb", 1)])
+
+    def test_should_stop_skips_targets_without_deleting(self):
+        run = clean(
+            [inspect(self.target)],
+            self.profile,
+            self.store,
+            processes=ProcessView,
+            should_stop=lambda: True,
+        )
+        self.assertEqual(run["status"], "interrupted")
+        self.assertEqual(run["results"][0]["outcome"], "skipped")
+        self.assertIn("cancelled", run["results"][0]["reason"])
+        self.assertTrue(self.file.exists())
+
     def test_command_failure_not_reported_as_success(self):
         with patch.object(self.handler, "execute", return_value=2):
             result = clean_one(inspect(self.target), self.handler, ProcessView)

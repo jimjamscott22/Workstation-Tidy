@@ -4,7 +4,7 @@ A small, local Python CLI for Ubuntu developer and desktop cleanup:
 
 **Scan → explain → select → preview → confirm → clean → verify.**
 
-Python 3.11+ and Linux are required. The application has no third-party runtime dependencies. Cleanup tools (`npm`, `uv`, `pip3`, Cargo and Git) are optional: missing tools block their handlers while leaving reports available.
+Python 3.11+ and Linux are required. The CLI has no third-party runtime dependencies; the optional TUI uses [Textual](https://textual.textualize.io/). Cleanup tools (`npm`, `uv`, `pip3`, Cargo and Git) are optional: missing tools block their handlers while leaving reports available.
 
 ## Run
 
@@ -33,6 +33,30 @@ uv run workstation-tidy history
 ```
 
 JSON reports carry `schema_version: 1`. Target IDs remain stable for a fixed profile; use IDs or exact paths with `show`, not row numbers from an earlier scan. Exit codes are 0 for successful requests (including cancellation/dry-run), 1 for errors or incomplete cleanup, 2 for argument syntax errors, and 130 for interruption. `doctor` returns 1 when process visibility or discovery is incomplete. Candidate-level measurement errors and blocked/missing targets remain visible in scan results.
+
+## Interactive TUI
+
+An optional full-screen interface runs the same scan → preview → confirm → clean flow with the same safety checks. It needs the `tui` extra:
+
+```sh
+uv sync --extra tui
+uv run workstation-tidy tui
+uv run workstation-tidy tui --dry-run          # browse and preview only
+uv tool install '.[tui]'                       # optional global install
+```
+
+`--profile` and `--config` work as for other commands. Without the extra, `tui` prints the install command and exits 1; every other command keeps working.
+
+| Key | Action |
+| --- | --- |
+| ↑/↓ | Move; the panel below explains the highlighted target |
+| Space / Enter | Select or deselect a candidate (nothing is preselected; blocked and report-only rows cannot be selected) |
+| p | Run safety preflight on the selection and preview each operation |
+| r | Rescan |
+| d / h / c | Doctor, history and configuration views |
+| q | Quit (blocked while cleanup is running) |
+
+The category menu and minimum-size box filter the table. A banner shows whether process visibility is verified. From the preview, **Clean…** opens a confirmation that only proceeds when you type `CLEAN`. While cleaning, results appear as each target finishes; **Stop after current target** skips the remaining targets but does not interrupt the operation already running. History is written exactly as for the CLI.
 
 ## What v1 cleans
 
@@ -79,6 +103,7 @@ Reports distinguish allocated bytes from logical bytes and deduplicate hardlinks
 ## Development
 
 ```sh
+uv sync --extra tui
 uv run python -m unittest discover -s tests -v
 uv build
 git diff --check

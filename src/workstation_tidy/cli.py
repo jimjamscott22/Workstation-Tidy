@@ -2,34 +2,26 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import shlex
 import shutil
 import sys
 from pathlib import Path
 
 from . import __version__
+from .common import (
+    check_environment,
+    collect,
+    filter_candidates,
+    human,
+    preflight_selected,
+    safe,
+)
 from .config import Profile, config_path, load_profile, state_path
 from .handlers import Handler
 from .models import Candidate, TidyError
 from .safety import process_view
-from .scanner import scan
 from .service import clean, filesystems
 from .storage import Store
-
-
-def human(value: int) -> str:
-    size = float(abs(value))
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
-        if size < 1024 or unit == "TiB":
-            return f"{'-' if value < 0 else ''}{size:.1f} {unit}"
-        size /= 1024
-    raise AssertionError("unreachable")
-
-
-def safe(value: object) -> str:
-    return "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in str(value))
 
 
 def size_argument(value: str) -> int:
@@ -53,6 +45,7 @@ def parser() -> argparse.ArgumentParser:
         ("doctor", "Check tools, configuration and process visibility"),
         ("history", "Show previous cleanup outcomes"),
         ("config", "Show effective locations and exclusions"),
+        ("tui", "Interactive terminal interface (needs the optional 'tui' extra)"),
     ):
         sub = commands.add_parser(name, help=help_text)
         sub.add_argument(
@@ -62,12 +55,12 @@ def parser() -> argparse.ArgumentParser:
             help="Profile TOML file (defaults apply if missing)",
         )
         sub.add_argument("--profile", default="usual")
-        if name != "clean":
+        if name not in {"clean", "tui"}:
             sub.add_argument("--json", action="store_true", help="Emit a versioned JSON report")
         if name in {"scan", "clean"}:
             sub.add_argument("--min-size", type=size_argument, default=0)
             sub.add_argument("--category", choices=("packages", "build", "desktop", "review"))
-        if name == "clean":
+        if name in {"clean", "tui"}:
             sub.add_argument(
                 "--dry-run",
                 action="store_true",
@@ -84,20 +77,6 @@ def report(value: dict, as_json: bool) -> None:
     else:
         for key, content in value.items():
             print(f"{safe(key)}: {safe(content)}")
-
-
-def collect(profile: Profile) -> tuple[list[Candidate], list[str]]:
-    candidates, errors = scan(profile)
-    handler = Handler(profile)
-    for candidate in candidates:
-        if candidate.eligible:
-            try:
-                handler.check_layout(candidate.target)
-                handler.preview(candidate.target)
-            except (OSError, TidyError) as exc:
-                candidate.eligible = False
-                candidate.reason = str(exc)
-    return candidates, errors
 
 
 def display(candidates: list[Candidate]) -> None:
@@ -140,18 +119,15 @@ def interactive_clean(candidates: list[Candidate], profile: Profile, dry_run: bo
     if not selected:
         print("No targets selected; nothing changed.")
         return 0
-    handler = Handler(profile)
-    view = process_view()
     eligible = []
-    for candidate in selected:
+    for candidate, operation, skip in preflight_selected(selected, profile, process_view()):
         print(f"\n{safe(candidate.target.id)}: {safe(candidate.target.path)}")
         print(safe(candidate.target.consequence))
-        try:
-            command = handler.preflight(candidate, view)
-            print("Operation: " + safe(shlex.join(command)))
+        if operation is not None:
+            print("Operation: " + safe(operation))
             eligible.append(candidate)
-        except (TidyError, OSError) as exc:
-            print("SKIP: " + safe(exc))
+        else:
+            print("SKIP: " + safe(skip))
     if dry_run:
         print("\nDry run complete. No cleanup or history writes performed.")
         return 0
@@ -179,19 +155,31 @@ def interactive_clean(candidates: list[Candidate], profile: Profile, dry_run: bo
     return 0 if all(r["outcome"] == "cleaned" for r in run["results"]) else 1
 
 
+def launch_tui(profile: Profile, dry_run: bool, config: Path) -> int:
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise TidyError("The TUI requires an interactive terminal. Use scan or clean --dry-run.")
+    try:
+        from .tui import run
+    except ImportError:
+        print(
+            "The TUI needs the optional 'tui' extra. Install it with "
+            "`uv tool install '.[tui]'` or, in this project, `uv sync --extra tui`.",
+            file=sys.stderr,
+        )
+        return 1
+    return run(profile, dry_run=dry_run, config_path=config)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if not args.command:
         parser().print_help()
         return 0
     try:
-        if os.geteuid() == 0:
-            raise TidyError(
-                "Run as your normal user, without sudo; root execution is not supported"
-            )
-        if not sys.platform.startswith("linux"):
-            raise TidyError("Workstation Tidy currently supports Linux only")
+        check_environment()
         profile = load_profile(args.profile, args.config)
+        if args.command == "tui":
+            return launch_tui(profile, args.dry_run, args.config)
         if args.command == "config":
             report(
                 {
@@ -262,12 +250,7 @@ def main(argv: list[str] | None = None) -> int:
                 value["operation"] = None
             report(value, args.json)
             return 0
-        candidates = [
-            c
-            for c in candidates
-            if c.size.allocated_bytes >= args.min_size
-            and (not args.category or c.target.category == args.category)
-        ]
+        candidates = filter_candidates(candidates, args.min_size, args.category)
         if args.command == "scan":
             if args.json:
                 report(
