@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import io
 import tempfile
@@ -8,7 +9,9 @@ from unittest.mock import patch
 
 from workstation_tidy.cli import main
 from workstation_tidy.config import load_profile
+from workstation_tidy.handlers import Handler
 from workstation_tidy.safety import ProcessView
+from workstation_tidy.service import clean
 from workstation_tidy.storage import Store
 
 HAS_TEXTUAL = importlib.util.find_spec("textual") is not None
@@ -39,7 +42,7 @@ class TuiTests(TuiFixture, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.make_home()
 
-    def app(self, dry_run=False, processes=ProcessView):
+    def app(self, dry_run=False, processes=ProcessView, cleaner=clean, store=None):
         from workstation_tidy.tui import TidyApp
 
         profile = load_profile("usual", self.config)
@@ -47,8 +50,9 @@ class TuiTests(TuiFixture, unittest.IsolatedAsyncioTestCase):
             profile,
             dry_run=dry_run,
             config_path=self.config,
-            store=Store(self.state),
+            store=store or Store(self.state),
             processes=processes,
+            cleaner=cleaner,
         )
 
     async def scanned(self, pilot):
@@ -63,6 +67,16 @@ class TuiTests(TuiFixture, unittest.IsolatedAsyncioTestCase):
     async def settle(self, pilot):
         await pilot.app.workers.wait_for_complete()
         await pilot.pause()
+
+    async def start_clean(self, pilot):
+        await self.scanned(pilot)
+        await pilot.press("space", "p")
+        await self.settle(pilot)
+        await pilot.click("#clean")
+        await pilot.pause()
+        await pilot.press(*"CLEAN")
+        self.assertFalse(pilot.app.screen.query_one("#confirm").disabled)
+        await pilot.press("enter")
 
     async def test_scan_lists_fixture_with_nothing_selected(self):
         app = self.app()
@@ -128,25 +142,75 @@ class TuiTests(TuiFixture, unittest.IsolatedAsyncioTestCase):
 
         app = self.app()
         async with app.run_test() as pilot:
-            await self.scanned(pilot)
-            await pilot.press("space", "p")
-            await self.settle(pilot)
-            await pilot.click("#clean")
-            await pilot.pause()
-            await pilot.press(*"CLEAN")
-            self.assertFalse(app.screen.query_one("#confirm").disabled)
-            await pilot.press("enter")
+            await self.start_clean(pilot)
             await self.settle(pilot)
             self.assertIsInstance(app.screen, RunScreen)
             self.assertEqual(app.screen.result_code, 0)
+            self.assertEqual(app.result_code, 0)
             self.assertFalse(app.running)
             await pilot.click("#done")
             await self.settle(pilot)
             self.assertIsInstance(app.screen, ScanScreen)
+            await pilot.press("q")
+        self.assertEqual(app.return_value, 0)
+        self.assertEqual(app.return_code, 0)
         self.assertFalse(self.file.exists())
         records = Store(self.state).read()
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["results"][0]["outcome"], "cleaned")
+
+    async def test_exit_code_nonzero_after_failed_skipped_or_stopped_cleanup(self):
+        from workstation_tidy.tui.screens import RunScreen
+
+        with patch.object(Handler, "execute", return_value=2):
+            failed_app = self.app()
+            async with failed_app.run_test() as pilot:
+                await self.start_clean(pilot)
+                await self.settle(pilot)
+                self.assertIsInstance(failed_app.screen, RunScreen)
+                self.assertEqual(failed_app.screen.result_code, 1)
+                await pilot.click("#done")
+                await self.settle(pilot)
+                await pilot.press("q")
+            self.assertEqual(failed_app.return_value, 1)
+            self.assertEqual(failed_app.return_code, 1)
+
+        views = iter(
+            [
+                ProcessView(),
+                ProcessView(),
+                ProcessView(errors=["cannot inspect PID 1"]),
+                ProcessView(),
+            ]
+        )
+        skipped_app = self.app(processes=lambda: next(views))
+        async with skipped_app.run_test() as pilot:
+            await self.start_clean(pilot)
+            await self.settle(pilot)
+            self.assertIsInstance(skipped_app.screen, RunScreen)
+            self.assertEqual(skipped_app.screen.result_code, 1)
+            await pilot.click("#done")
+            await self.settle(pilot)
+            await pilot.press("q")
+        self.assertEqual(skipped_app.return_value, 1)
+        self.assertEqual(skipped_app.return_code, 1)
+
+        def stopped_cleaner(candidates, profile, store, **kwargs):
+            kwargs["should_stop"] = lambda: True
+            return clean(candidates, profile, store, **kwargs)
+
+        stopped_app = self.app(cleaner=stopped_cleaner)
+        async with stopped_app.run_test() as pilot:
+            await self.start_clean(pilot)
+            await self.settle(pilot)
+            self.assertIsInstance(stopped_app.screen, RunScreen)
+            self.assertEqual(stopped_app.screen.result_code, 1)
+            await pilot.click("#done")
+            await self.settle(pilot)
+            await pilot.press("q")
+        self.assertEqual(stopped_app.return_value, 1)
+        self.assertEqual(stopped_app.return_code, 1)
+        self.assertTrue(self.file.exists())
 
     async def test_insufficient_process_visibility_is_shown_and_skips(self):
         app = self.app(processes=lambda: ProcessView(errors=["cannot inspect PID 1"]))
@@ -203,3 +267,39 @@ class TuiCliTests(TuiFixture, unittest.TestCase):
             code = main(["tui", "--config", str(self.config)])
         self.assertEqual(code, 1)
         self.assertIn("interactive terminal", err.getvalue())
+
+    @unittest.skipUnless(HAS_TEXTUAL, "textual is not installed")
+    def test_cli_tui_returns_cleanup_exit_code(self):
+        from workstation_tidy.tui import TidyApp
+
+        def drive_app(app: TidyApp) -> int | None:
+            app.store = Store(self.state)
+            app.processes = ProcessView
+
+            async def run_pilot() -> int | None:
+                async with app.run_test() as pilot:
+                    await pilot.app.workers.wait_for_complete()
+                    await pilot.pause()
+                    await pilot.press("space", "p")
+                    await pilot.app.workers.wait_for_complete()
+                    await pilot.pause()
+                    await pilot.click("#clean")
+                    await pilot.pause()
+                    await pilot.press(*"CLEAN", "enter")
+                    await pilot.app.workers.wait_for_complete()
+                    await pilot.pause()
+                    await pilot.press("q")
+                return app.return_value
+
+            return asyncio.run(run_pilot())
+
+        with (
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch.object(TidyApp, "run", autospec=True, side_effect=drive_app),
+        ):
+            with patch.object(Handler, "execute", return_value=2):
+                self.assertEqual(main(["tui", "--config", str(self.config)]), 1)
+            self.assertTrue(self.file.exists())
+            self.assertEqual(main(["tui", "--config", str(self.config)]), 0)
+            self.assertFalse(self.file.exists())

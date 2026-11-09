@@ -435,7 +435,10 @@ class ConfirmModal(ModalScreen[bool]):
 
 
 class RunScreen(TidyScreen):
-    BINDINGS = [Binding("escape", "done", "Back to scan")]
+    BINDINGS = [
+        Binding("escape", "done", "Back to scan"),
+        Binding("q", "app.quit", "Quit"),
+    ]
     DEFAULT_CSS = """
     RunScreen #status { padding: 0 1; height: auto; }
     RunScreen RichLog { height: 1fr; }
@@ -495,6 +498,7 @@ class RunScreen(TidyScreen):
 
     def failed(self, exc: Exception) -> None:
         self.result_code = 1
+        self.tidy.result_code = 1
         self.finish_ui(plain(f"Cleanup did not start: {exc}", "bold red"))
 
     def finished(self, run: dict) -> None:
@@ -515,8 +519,11 @@ class RunScreen(TidyScreen):
                 "dim",
             )
         )
-        cleaned = all(r["outcome"] == "cleaned" for r in run["results"])
+        cleaned = run["status"] == "completed" and all(
+            r["outcome"] == "cleaned" for r in run["results"]
+        )
         self.result_code = 0 if cleaned else 1
+        self.tidy.result_code = self.result_code
         if run["status"] == "interrupted":
             status = Text("Stopped. Completed cleanup is kept in history.", "bold yellow")
         elif cleaned:

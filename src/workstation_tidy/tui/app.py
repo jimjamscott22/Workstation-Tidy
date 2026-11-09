@@ -44,6 +44,7 @@ class TidyApp(App[int]):
         self.view: ProcessView | None = None
         self.selected: set[str] = set()
         self.running = False
+        self.result_code = 0
         self.sub_title = f"profile: {profile.name}" + (" · DRY RUN" if dry_run else "")
 
     def on_mount(self) -> None:
@@ -76,4 +77,4 @@ class TidyApp(App[int]):
                 severity="warning",
             )
             return
-        self.exit(0)
+        self.exit(self.result_code, return_code=self.result_code)
