@@ -450,6 +450,7 @@ class RunScreen(TidyScreen):
         super().__init__()
         self.eligible = eligible
         self.stop_requested = False
+        self.started = False
         self.result_code: int | None = None
 
     def compose(self) -> ComposeResult:
@@ -467,14 +468,23 @@ class RunScreen(TidyScreen):
 
     @work(thread=True, exclusive=True, group="clean")
     def clean_worker(self) -> None:
+        def on_result(result: dict) -> None:
+            self.started = True
+            self.app.call_from_thread(self.add_result, result)
+
+        def should_stop() -> bool:
+            if not self.stop_requested:
+                self.started = True
+            return self.stop_requested
+
         try:
             run = self.tidy.cleaner(
                 self.eligible,
                 self.tidy.profile,
                 self.tidy.store,
                 processes=self.tidy.processes,
-                on_result=lambda r: self.app.call_from_thread(self.add_result, r),
-                should_stop=lambda: self.stop_requested,
+                on_result=on_result,
+                should_stop=should_stop,
             )
         except (TidyError, OSError) as exc:
             self.app.call_from_thread(self.failed, exc)
@@ -499,7 +509,12 @@ class RunScreen(TidyScreen):
     def failed(self, exc: Exception) -> None:
         self.result_code = 1
         self.tidy.result_code = 1
-        self.finish_ui(plain(f"Cleanup did not start: {exc}", "bold red"))
+        prefix = (
+            "Cleanup failed and may have partially completed"
+            if self.started
+            else "Cleanup did not start"
+        )
+        self.finish_ui(plain(f"{prefix}: {exc}", "bold red"))
 
     def finished(self, run: dict) -> None:
         log = self.query_one(RichLog)

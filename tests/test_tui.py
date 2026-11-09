@@ -212,6 +212,53 @@ class TuiTests(TuiFixture, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stopped_app.return_code, 1)
         self.assertTrue(self.file.exists())
 
+    async def test_oserror_before_vs_after_execution_reports_accurate_status(self):
+        from workstation_tidy.tui.screens import RunScreen
+
+        store_before = Store(self.state)
+        with patch.object(store_before, "save", side_effect=OSError("cannot write initial state")):
+            app_before = self.app(store=store_before)
+            async with app_before.run_test() as pilot:
+                await self.start_clean(pilot)
+                await self.settle(pilot)
+                self.assertIsInstance(app_before.screen, RunScreen)
+                status = str(app_before.screen.query_one("#status").render())
+                self.assertIn("Cleanup did not start: cannot write initial state", status)
+                self.assertEqual(app_before.screen.result_code, 1)
+                await pilot.press("q")
+            self.assertEqual(app_before.return_value, 1)
+            self.assertEqual(app_before.return_code, 1)
+        self.assertTrue(self.file.exists())
+
+        store_after = Store(self.state)
+        real_save = store_after.save
+        calls = 0
+
+        def fail_second_save(record):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("disk full after target")
+            real_save(record)
+
+        with patch.object(store_after, "save", side_effect=fail_second_save):
+            app_after = self.app(store=store_after)
+            async with app_after.run_test() as pilot:
+                await self.start_clean(pilot)
+                await self.settle(pilot)
+                self.assertIsInstance(app_after.screen, RunScreen)
+                status = str(app_after.screen.query_one("#status").render())
+                self.assertIn(
+                    "Cleanup failed and may have partially completed: disk full after target",
+                    status,
+                )
+                self.assertNotIn("Cleanup did not start", status)
+                self.assertEqual(app_after.screen.result_code, 1)
+                await pilot.press("q")
+            self.assertEqual(app_after.return_value, 1)
+            self.assertEqual(app_after.return_code, 1)
+        self.assertFalse(self.file.exists())
+
     async def test_insufficient_process_visibility_is_shown_and_skips(self):
         app = self.app(processes=lambda: ProcessView(errors=["cannot inspect PID 1"]))
         async with app.run_test() as pilot:
