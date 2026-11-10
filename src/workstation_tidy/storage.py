@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import tempfile
@@ -33,6 +32,10 @@ class Store:
 
     @contextmanager
     def lock(self) -> Iterator[None]:
+        # Imported lazily: fcntl is Unix-only, and importing this module must not crash on
+        # other platforms before check_environment() can report "Linux only".
+        import fcntl
+
         self.path.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.path.resolve() != self.path or self.path.stat().st_uid != os.getuid():
             raise TidyError("State directory must be canonical and owned by the current user")

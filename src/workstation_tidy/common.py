@@ -27,10 +27,11 @@ def safe(value: object) -> str:
 
 
 def check_environment() -> None:
-    if os.geteuid() == 0:
-        raise TidyError("Run as your normal user, without sudo; root execution is not supported")
+    # Check the platform first: os.geteuid() does not exist on Windows.
     if not sys.platform.startswith("linux"):
         raise TidyError("Workstation Tidy currently supports Linux only")
+    if os.geteuid() == 0:
+        raise TidyError("Run as your normal user, without sudo; root execution is not supported")
 
 
 def collect(profile: Profile) -> tuple[list[Candidate], list[str]]:
