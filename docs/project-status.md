@@ -1,6 +1,6 @@
 # Workstation Tidy project status
 
-Updated October 21, 2026. Version 0.1.0 implements the approved user-level Python CLI design.
+Updated November 7, 2026. Version 0.1.0 implements the approved user-level Python CLI design.
 
 ## Implemented
 
@@ -11,11 +11,12 @@ Updated October 21, 2026. Version 0.1.0 implements the approved user-level Pytho
 - Owning-tool cleanup for npm/uv/pip/Cargo; recognized desktop cache files use directory descriptors. Imager OS-list metadata is retained. Expected uv cache-internal links are measured without traversal; external links and environment dependencies block cleanup.
 - Identity, ownership, layout, Git-tracked-output, Cargo configuration, launcher and active-process checks. Unverifiable process visibility blocks cleanup rather than assuming inactivity.
 - Sequential execution, single-instance lock, atomic bounded history, interruption results, partial/failure/skip reporting and per-filesystem free-space measurements.
-- Standard-library-only runtime, Python 3.11+ package and console entry point; uv development environment and lockfile.
+- Optional Textual TUI (`workstation-tidy tui`, `tui` extra): filterable scan table with detail pane, selection by stable target ID, preflight preview, typed `CLEAN` confirmation, live per-target results, stop-after-current, doctor/history/config views and `--dry-run`. It reuses the core preflight and `service.clean`; no checks are added or bypassed.
+- Standard-library-only CLI runtime, Python 3.11+ package and console entry point; uv development environment and lockfile.
 
 ## Verification
 
-- 56 unittest tests passed on Python 3.14.4, with warnings treated as errors.
+- 68 unittest tests passed on Python 3.14.4 (including headless Textual TUI tests), with warnings treated as errors.
 - Four real-tool fixture integrations passed: npm, uv, pip and Cargo. These only removed disposable fixture data and checked that installed dependencies, source/lockfiles, environments or retained metadata survived.
 - Ruff lint/format checks and mypy passed for the source.
 - Wheel and source-distribution build passed; packaged command and read-only workstation reports were exercised.
@@ -33,4 +34,4 @@ Updated October 21, 2026. Version 0.1.0 implements the approved user-level Pytho
 
 ## Next step
 
-Use the read-only scan/show commands to review the profile. Before expanding live cleanup, design a narrowly scoped solution for protected-process inspection; do not weaken the check silently. Privileged/system cleanup, browser/profile clearing, runtime pruning, scheduling and a GUI remain outside v1.
+Use the read-only scan/show commands to review the profile. Before expanding live cleanup, design a narrowly scoped solution for protected-process inspection; do not weaken the check silently. Privileged/system cleanup, browser/profile clearing, runtime pruning, scheduling and a graphical (non-terminal) GUI remain outside v1.

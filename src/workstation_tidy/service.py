@@ -34,7 +34,16 @@ def clean(
     store: Store,
     handler: Handler | None = None,
     processes: Callable[[], ProcessView] = process_view,
+    *,
+    on_result: Callable[[dict], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> dict:
+    """Clean candidates in order, saving history after each one.
+
+    on_result is called with each result after it is saved. should_stop is
+    checked before each target; once true, the rest are skipped and the run is
+    marked interrupted. Neither can stop an operation that has already started.
+    """
     handler = handler or Handler(profile)
     run: dict = {
         "id": str(uuid.uuid4()),
@@ -48,13 +57,17 @@ def clean(
         before = filesystems(candidates)
         store.save(run)
         interrupted = False
+        stop_reason = "Run interrupted"
         for candidate in candidates:
+            if not interrupted and should_stop is not None and should_stop():
+                interrupted = True
+                stop_reason = "Run cancelled by user before this target started"
             if interrupted:
                 result = Result(
                     candidate.target.id,
                     str(candidate.target.path),
                     "skipped",
-                    "Run interrupted",
+                    stop_reason,
                     candidate.size.allocated_bytes,
                     None,
                 )
@@ -64,6 +77,8 @@ def clean(
             run["results"].append(asdict(result))
             run["status"] = "interrupted" if interrupted else "running"
             store.save(run)
+            if on_result is not None:
+                on_result(run["results"][-1])
         after = filesystems(candidates)
         for device, fs in before.items():
             end = after.get(device)
