@@ -310,7 +310,11 @@ class TuiCliTests(TuiFixture, unittest.TestCase):
 
     def test_requires_terminal(self):
         err = io.StringIO()
-        with redirect_stderr(err):
+        with (
+            redirect_stderr(err),
+            patch("sys.stdin.isatty", return_value=False),
+            patch("sys.stdout.isatty", return_value=False),
+        ):
             code = main(["tui", "--config", str(self.config)])
         self.assertEqual(code, 1)
         self.assertIn("interactive terminal", err.getvalue())
