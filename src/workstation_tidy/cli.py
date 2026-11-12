@@ -120,7 +120,10 @@ def interactive_clean(candidates: list[Candidate], profile: Profile, dry_run: bo
         print("No targets selected; nothing changed.")
         return 0
     eligible = []
-    for candidate, operation, skip in preflight_selected(selected, profile, process_view()):
+    view = process_view()
+    if view.opaque:
+        print("Not inspected (session daemons): " + safe(", ".join(view.opaque)))
+    for candidate, operation, skip in preflight_selected(selected, profile, view):
         print(f"\n{safe(candidate.target.id)}: {safe(candidate.target.path)}")
         print(safe(candidate.target.consequence))
         if operation is not None:
@@ -221,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                     "tools": tools,
                     "process_visibility": "verified" if not view.errors else "insufficient",
                     "process_errors": view.errors,
+                    "process_not_inspected": view.opaque,
                     "discovery_errors": errors,
                     "targets": [
                         {"id": c.target.id, "eligible": c.eligible, "reason": c.reason}

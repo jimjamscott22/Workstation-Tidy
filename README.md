@@ -88,11 +88,11 @@ Choose another profile with `--profile NAME`, or another file with `--config /ab
 
 Scans read directory metadata; they do not inspect personal file contents. Preflight reads relevant manifests/configuration, cache markers, Git file lists and desktop launcher definitions. Target paths, outcomes and measurements are stored; credentials and raw external-tool output are not logged.
 
-Symlinked paths, unknown layouts, inaccessible entries, changed identities, active targets, unsupported Cargo overrides and incomplete process visibility block cleanup. uv dependency inspection walks metadata under your home directory with a 500,000-entry/20-second limit; reaching the limit blocks cleanup. Scans identify candidates, not guarantees that preflight will pass.
+Symlinked paths, unknown layouts, inaccessible entries, changed identities, active targets, unsupported Cargo overrides and incomplete process visibility block cleanup. uv dependency inspection walks metadata under your home directory, skipping `.git`, `node_modules`, `__pycache__` and Cargo `target` folders beside a `Cargo.toml`, with a 3,000,000-entry/20-second limit; reaching the limit blocks cleanup. Scans identify candidates, not guarantees that preflight will pass.
 
 Process checks require the host Linux PID namespace. A sandbox, container, `/proc` restrictions or protected processes can prevent verification: `doctor` explains this and cleanup is deferred. Run from your normal host terminal without sudo. The app never escalates or terminates processes.
 
-On the current workstation, the native-host check also found protected session processes that the normal user cannot inspect fully. The strict check currently defers cleanup here even outside the sandbox; read-only scanning and previews remain available. See project status for this unresolved host limitation. There is no bypass flag.
+Some session daemons mark themselves non-dumpable, so even their owner cannot read their open files: `systemd --user`, `(sd-pam)`, `ssh-agent`, `gpg-agent` and `gnome-keyring-daemon`. These are accepted only when both the process name and its command line match the system binary, and they are always listed as not inspected in `doctor`, the `clean` preview and the TUI. Any other process that cannot be inspected still blocks cleanup. There is no bypass flag.
 
 Preflight and path identity are rechecked before each operation; direct desktop deletion uses directory descriptors and no-follow opens. Package-manager commands still operate on paths, and checks cannot eliminate every race with another process changing files or starting after inspection. Close affected applications and builds. This utility is not intended for adversarial concurrently modified directories.
 

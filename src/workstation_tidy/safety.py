@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import stat
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -17,10 +16,28 @@ class Process:
     references: tuple[Path, ...] = ()
 
 
+# Session daemons that mark themselves non-dumpable, so even their owner cannot read
+# their descriptors. Each is accepted only when its command line also matches, and is
+# always reported as not inspected; any other unreadable process still blocks cleanup.
+SESSION_DAEMONS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "(sd-pam)": (("(sd-pam)",),),
+    "systemd": (("/usr/lib/systemd/systemd", "--user"), ("/lib/systemd/systemd", "--user")),
+    "ssh-agent": (("/usr/bin/ssh-agent",),),
+    "gpg-agent": (("/usr/bin/gpg-agent",),),
+    "gnome-keyring-d": (("/usr/bin/gnome-keyring-daemon",),),
+}
+
+
+def session_daemon(comm: str, argv: list[bytes]) -> bool:
+    args = [os.fsdecode(a) for a in argv if a]
+    return any(args[: len(prefix)] == list(prefix) for prefix in SESSION_DAEMONS.get(comm, ()))
+
+
 @dataclass
 class ProcessView:
     processes: list[Process] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    opaque: list[str] = field(default_factory=list)
 
     def check(self, target: Target) -> None:
         if self.errors:
@@ -57,7 +74,7 @@ def process_view(proc: Path = Path("/proc")) -> ProcessView:
         try:
             if directory.stat().st_uid != os.getuid():
                 continue
-            name = (directory / "comm").read_text().strip()
+            comm = name = (directory / "comm").read_text().strip()
             # Only classify command names; arguments are never stored or printed.
             argv = (directory / "cmdline").read_bytes().split(b"\0")[:3]
             for arg in argv:
@@ -67,8 +84,12 @@ def process_view(proc: Path = Path("/proc")) -> ProcessView:
                 if stem == "pip" and b"-m" in argv:
                     name = "pip"
             refs = []
-            entries = [directory / "cwd", directory / "exe", *list((directory / "fd").iterdir())]
-            for entry in entries:
+            denied = False
+            try:
+                descriptors = list((directory / "fd").iterdir())
+            except PermissionError:
+                descriptors, denied = [], True
+            for entry in [directory / "cwd", directory / "exe", *descriptors]:
                 try:
                     dest = os.readlink(entry).removesuffix(" (deleted)")
                     if dest.startswith("/"):
@@ -76,6 +97,11 @@ def process_view(proc: Path = Path("/proc")) -> ProcessView:
                 except FileNotFoundError:
                     continue  # Processes and descriptors can exit during inspection.
                 except PermissionError:
+                    denied = True
+            if denied:
+                if session_daemon(comm, argv):
+                    view.opaque.append(f"PID {directory.name} ({comm})")
+                else:
                     view.errors.append(f"cannot inspect references of PID {directory.name}")
             view.processes.append(Process(name, tuple(refs)))
         except (FileNotFoundError, ProcessLookupError):
@@ -83,6 +109,7 @@ def process_view(proc: Path = Path("/proc")) -> ProcessView:
         except OSError:
             view.errors.append(f"cannot inspect PID {directory.name}")
     view.errors = sorted(set(view.errors))
+    view.opaque.sort(key=lambda entry: int(entry.split()[1]))
     return view
 
 
@@ -125,38 +152,51 @@ def check_cargo_settings(target: Path, home: Path) -> None:
                 raise TidyError(f"Cannot verify Cargo configuration: {path}") from exc
 
 
+# Trees that hold dependencies, history or build output for other tools, never a
+# Python environment. Cargo "target" is only skipped beside a Cargo.toml.
+UV_SCAN_PRUNE = frozenset({".git", "node_modules", "__pycache__"})
+
+
 def cache_link_check(
-    cache: Path, home: Path, max_entries: int = 500_000, seconds: float = 20.0
+    cache: Path, home: Path, max_entries: int = 3_000_000, seconds: float = 20.0
 ) -> None:
     """Look for environments symlinked into uv's cache using metadata only.
 
     A bounded or incomplete traversal cannot prove safety and blocks cleanup.
     Cache-internal symlinks are irrelevant to external environment dependencies.
+    Entry types come from directory listings, so only symlinks cost an extra call.
     """
     deadline = time.monotonic() + seconds
     count = 0
-
-    def error(exc: OSError) -> None:
-        raise TidyError(f"Cannot rule out uv cache dependencies: {exc}")
-
-    for current, dirs, files in os.walk(home, followlinks=False, onerror=error):
-        path = Path(current)
-        if path == cache:
-            dirs[:] = []
+    pending = [home]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as listing:
+                entries = list(listing)
+        except FileNotFoundError:
             continue
-        for name in dirs + files:
+        except OSError as exc:
+            raise TidyError(f"Cannot rule out uv cache dependencies: {exc}") from exc
+        cargo_project = any(e.name == "Cargo.toml" for e in entries)
+        for entry in entries:
             count += 1
             if count > max_entries or time.monotonic() > deadline:
                 raise TidyError("uv dependency inspection limit reached; cache cleanup deferred")
-            p = path / name
             try:
-                info = p.lstat()
-                if stat.S_ISLNK(info.st_mode):
-                    dest = p.resolve(strict=False)
+                if entry.is_symlink():
+                    dest = Path(entry.path).resolve(strict=False)
                     if dest == cache or cache in dest.parents:
                         raise TidyError(
                             "An environment symlinks into the uv cache; cleanup deferred"
                         )
+                elif entry.is_dir(follow_symlinks=False):
+                    path = Path(entry.path)
+                    if path == cache or entry.name in UV_SCAN_PRUNE:
+                        continue
+                    if entry.name == "target" and cargo_project:
+                        continue
+                    pending.append(path)
             except FileNotFoundError:
                 continue
             except (OSError, RuntimeError) as exc:

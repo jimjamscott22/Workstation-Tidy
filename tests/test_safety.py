@@ -66,6 +66,82 @@ class SafetyTests(unittest.TestCase):
         (proc / "1/comm").write_text("codex\n")
         self.assertTrue(process_view(proc).errors)
 
+    def fake_proc(self, pid, comm, argv, fd_mode=0o000, root="proc"):
+        """A host-like /proc whose process hides its descriptors like a non-dumpable one."""
+        proc = self.home / root
+        (proc / "1").mkdir(parents=True, exist_ok=True)
+        (proc / "1/comm").write_text("systemd\n")
+        directory = proc / str(pid)
+        (directory / "fd").mkdir(parents=True)
+        (directory / "comm").write_text(comm + "\n")
+        (directory / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+        (directory / "fd/0").symlink_to("/dev/null")
+        (directory / "fd").chmod(fd_mode)
+        self.addCleanup((directory / "fd").chmod, 0o700)
+        return proc
+
+    def test_session_daemons_hiding_descriptors_are_listed_not_blocking(self):
+        self.fake_proc(3164, "(sd-pam)", ["(sd-pam)"])
+        self.fake_proc(47638, "ssh-agent", ["/usr/bin/ssh-agent", "-D"])
+        # systemd --user lists its descriptors but refuses to resolve them.
+        proc = self.fake_proc(3148, "systemd", ["/usr/lib/systemd/systemd", "--user"], 0o400)
+        view = process_view(proc)
+        self.assertEqual(view.errors, [])
+        self.assertEqual(
+            view.opaque, ["PID 3148 (systemd)", "PID 3164 ((sd-pam))", "PID 47638 (ssh-agent)"]
+        )
+        view.check(self.target())  # Accepted daemons do not block cleanup.
+
+    def test_unknown_process_hiding_descriptors_blocks(self):
+        proc = self.fake_proc(4000, "python3", ["/usr/bin/python3", "build.py"])
+        view = process_view(proc)
+        self.assertEqual(view.opaque, [])
+        with self.assertRaisesRegex(TidyError, "Process visibility insufficient"):
+            view.check(self.target())
+
+    def test_session_daemon_name_with_unexpected_command_blocks(self):
+        cases = {
+            "path": ("ssh-agent", ["/home/user/bin/ssh-agent"]),
+            "no-user-flag": ("systemd", ["/usr/lib/systemd/systemd"]),
+        }
+        for root, (comm, argv) in cases.items():
+            with self.subTest(root):
+                view = process_view(self.fake_proc(4001, comm, argv, root=root))
+                self.assertTrue(view.errors)
+                self.assertEqual(view.opaque, [])
+
+    def test_uv_scan_skips_trees_that_cannot_hold_environments(self):
+        cache = self.home / ".cache/uv"
+        cache.mkdir(parents=True)
+        project = self.home / "proj"
+        for heavy in ("node_modules", ".git", "__pycache__", "target"):
+            (project / heavy).mkdir(parents=True)
+            for i in range(30):
+                (project / heavy / f"f{i}").touch()
+        (project / "Cargo.toml").touch()
+        venv = project / ".venv"
+        venv.mkdir()
+        (venv / "pyvenv.cfg").touch()
+        (venv / "python").symlink_to("/usr/bin/python3")
+        cache_link_check(cache, self.home, max_entries=40)
+
+    def test_uv_scan_checks_target_dirs_without_a_cargo_manifest(self):
+        cache = self.home / ".cache/uv"
+        cache.mkdir(parents=True)
+        (self.home / "data/target").mkdir(parents=True)
+        (self.home / "data/target/pkg").symlink_to(cache / "archive-v0/data")
+        with self.assertRaisesRegex(TidyError, "symlinks"):
+            cache_link_check(cache, self.home)
+
+    def test_uv_scan_blocks_on_unreadable_directory(self):
+        cache = self.home / ".cache/uv"
+        cache.mkdir(parents=True)
+        locked = self.home / "locked"
+        locked.mkdir(mode=0o000)
+        self.addCleanup(locked.chmod, 0o700)
+        with self.assertRaisesRegex(TidyError, "Cannot rule out"):
+            cache_link_check(cache, self.home)
+
     def test_uv_environment_symlink_blocks(self):
         cache = self.home / ".cache/uv"
         cache.mkdir(parents=True)

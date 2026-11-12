@@ -25,7 +25,8 @@ Updated November 7, 2026. Version 0.1.0 implements the approved user-level Pytho
 ## Limits and remaining evidence
 
 - No real user cache or build output was deleted during implementation. No native-host cleanup of personal data was performed.
-- **Current host blocker:** protected session processes (including the session manager/PAM helper and ssh-agent) cannot be fully inspected as the normal user. `doctor` reports their PIDs; the strict visibility rule currently defers cleanup on this host. Running outside the sandbox alone does not eliminate this restriction. There is no override to suppress the check.
+- **Resolved host blocker (2026-11-11):** non-dumpable session daemons (`systemd --user`, `(sd-pam)`, `ssh-agent`) previously blocked all cleanup. A fixed allowlist, matched by process name and command line, now accepts them and lists them as not inspected. Any other process that cannot be inspected still blocks. Native-host `doctor` now reports visibility as verified.
+- uv cleanup on this host remains blocked by existing checks: cached `uvx`/`uv run --with` environments in `environments-v2`, and `archive-v0/*/bin/python` links to uv-managed Python installs.
 - Fixture cleanup tests simulate a complete process view. They prove selection/execution boundaries and tool behavior, not that the host's protected-process visibility issue is resolved.
 - Process/path checks are point-in-time, not an adversarial race-proof transaction around external tools. Close affected apps and builds. No process termination, privilege escalation or recursive-deletion fallback is implemented.
 - uv metadata dependency scans have limits and block on incomplete inspection. Cargo configuration overrides, unknown generated layouts and launcher-linked outputs are intentionally conservative.

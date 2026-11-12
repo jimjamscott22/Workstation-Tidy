@@ -51,6 +51,22 @@ class CliTests(unittest.TestCase):
         self.assertTrue(self.file.exists())
         self.assertFalse((self.home / ".local/state/workstation-tidy").exists())
 
+    def test_doctor_lists_session_daemons_not_inspected(self):
+        view = ProcessView(opaque=["PID 3164 ((sd-pam))"])
+        with patch("workstation_tidy.cli.process_view", return_value=view):
+            code, out, _ = self.run_cli(["doctor", "--json"])
+        value = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(value["process_visibility"], "verified")
+        self.assertEqual(value["process_not_inspected"], ["PID 3164 ((sd-pam))"])
+
+    def test_clean_preview_names_session_daemons_not_inspected(self):
+        view = ProcessView(opaque=["PID 3164 ((sd-pam))"])
+        with patch("workstation_tidy.cli.process_view", return_value=view):
+            code, out, _ = self.run_cli(["clean"], True, ["1", "no"])
+        self.assertEqual(code, 0)
+        self.assertIn("Not inspected (session daemons): PID 3164 ((sd-pam))", out)
+
     def test_show_explains_consequences(self):
         code, out, _ = self.run_cli(["show", "thumbnails", "--json"])
         self.assertEqual(code, 0)
