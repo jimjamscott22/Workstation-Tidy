@@ -23,7 +23,13 @@ def filesystems(candidates: list[Candidate]) -> dict[str, dict[str, int | str]]:
         info = path.stat()
         key = str(info.st_dev)
         if key not in result:
-            fs = os.statvfs(path)
+            statvfs = getattr(os, "statvfs", None)
+            if statvfs is None:
+                continue
+            try:
+                fs = statvfs(path)
+            except (AttributeError, OSError):
+                continue
             result[key] = {"path": str(path), "available_bytes": fs.f_bavail * fs.f_frsize}
     return result
 

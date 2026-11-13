@@ -13,7 +13,15 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
-from ..common import collect, filter_candidates, human, preflight_selected, safe
+from ..common import (
+    collect,
+    filter_candidates,
+    human,
+    modified_text,
+    preflight_selected,
+    safe,
+    split_detail,
+)
 from ..handlers import Handler
 from ..models import Candidate, TidyError
 
@@ -46,6 +54,17 @@ def parse_size(value: str) -> int:
         raise ValueError(str(exc)) from exc
 
 
+def parse_age(value: str) -> float | None:
+    from ..cli import age_argument
+
+    if not value.strip():
+        return None
+    try:
+        return age_argument(value.strip())
+    except argparse.ArgumentTypeError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 class TidyScreen(Screen):
     @property
     def tidy(self) -> TidyApp:
@@ -70,9 +89,11 @@ class ScanScreen(TidyScreen):
     ScanScreen #category { width: 24; }
     ScanScreen #min-size { width: 28; }
     ScanScreen #min-size.-invalid { border: tall $error; }
+    ScanScreen #older-than { width: 26; }
+    ScanScreen #older-than.-invalid { border: tall $error; }
     ScanScreen #summary { padding: 1 2; width: 1fr; text-align: right; }
     ScanScreen DataTable { height: 1fr; }
-    ScanScreen #detail { height: auto; max-height: 12; padding: 0 1; border-top: solid $primary; }
+    ScanScreen #detail { height: auto; max-height: 16; padding: 0 1; border-top: solid $primary; }
     """
 
     def compose(self) -> ComposeResult:
@@ -81,6 +102,7 @@ class ScanScreen(TidyScreen):
         with Horizontal(id="filters"):
             yield Select([(c, c) for c in CATEGORIES], prompt="All categories", id="category")
             yield Input(placeholder="Min size e.g. 500MiB", id="min-size")
+            yield Input(placeholder="Older than e.g. 90d", id="older-than")
             yield Static("", id="summary")
         yield DataTable(id="table", cursor_type="row", zebra_stripes=True)
         yield VerticalScroll(Static("", id="detail-text"), id="detail")
@@ -94,6 +116,7 @@ class ScanScreen(TidyScreen):
         table.add_column("Status", key="status", width=14)
         table.add_column("Target", key="id")
         self.min_size = 0
+        self.older_than: float | None = None
         self.category: str | None = None
         table.focus()
         self.rescan()
@@ -153,7 +176,9 @@ class ScanScreen(TidyScreen):
     # Table --------------------------------------------------------------------
 
     def visible(self) -> list[Candidate]:
-        return filter_candidates(self.tidy.candidates, self.min_size, self.category)
+        return filter_candidates(
+            self.tidy.candidates, self.min_size, self.category, older_than=self.older_than
+        )
 
     def mark(self, candidate: Candidate) -> str:
         if not candidate.eligible:
@@ -214,6 +239,15 @@ class ScanScreen(TidyScreen):
             f"{human(size.allocated_bytes)} allocated · {human(size.logical_bytes)} logical · "
             f"{size.files:,} files"
         )
+        text.append("\nModified: ", "bold")
+        text.append(modified_text(size.newest_mtime))
+        project, marker = split_detail(target.detail)
+        if project:
+            text.append("\nProject: ", "bold")
+            text.append(safe(project))
+        if marker:
+            text.append("\nMarker: ", "bold")
+            text.append(safe(marker))
         text.append("\nStatus: ", "bold")
         text.append(safe(candidate.reason))
         if target.kind == "review":
@@ -253,6 +287,16 @@ class ScanScreen(TidyScreen):
     def min_size_changed(self, event: Input.Changed) -> None:
         try:
             self.min_size = parse_size(event.value)
+        except ValueError:
+            event.input.add_class("-invalid")
+            return
+        event.input.remove_class("-invalid")
+        self.refresh_table()
+
+    @on(Input.Changed, "#older-than")
+    def older_than_changed(self, event: Input.Changed) -> None:
+        try:
+            self.older_than = parse_age(event.value)
         except ValueError:
             event.input.add_class("-invalid")
             return
@@ -669,6 +713,8 @@ def config_report(app: TidyApp) -> Text:
     text.append(f"{safe(profile.name)}\n")
     text.append("Discover Cargo: ", "bold")
     text.append(f"{profile.discover_cargo}\n")
+    text.append("Discover project artifacts: ", "bold")
+    text.append(f"{profile.discover_artifacts}\n")
     text.append("\nProject roots\n", "bold underline")
     for root in profile.project_roots or ["(none)"]:
         text.append(f"  {safe(root)}\n")

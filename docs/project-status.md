@@ -1,12 +1,14 @@
 # Workstation Tidy project status
 
-Updated November 7, 2026. Version 0.1.0 implements the approved user-level Python CLI design.
+Updated November 13, 2026. Version 0.1.0 implements the approved user-level Python CLI design, plus project-artifact discovery.
 
 ## Implemented
 
 - `scan`, `show`, `clean`, `doctor`, `history`, and `config`, with profile selection and read-only JSON reports.
 - Numbered interactive selection, no preselection, exact operation previews, explicit `CLEAN` confirmation, dry-run and non-TTY deletion refusal.
 - Default npm/uv/pip, Cargo, thumbnails and Pi Imager candidates, the eight historical Cargo locations, report-only application directories, custom TOML profiles, subtree exclusions and optional Cargo/worktree discovery.
+- Project-artifact discovery (on by default): `node_modules` with a lockfile, virtualenvs containing `pyvenv.cfg`, Python tool caches, and named frontend build folders can be cleaned on Linux after the same preview and `CLEAN` confirmation. Ambiguous `dist`/`build`/`out`/`coverage`/`htmlcov` directories are reported and never deleted. `scan` and `show` include age, parent project, and marker. `--older-than` filters by newest mtime.
+- Windows identification: `scan`, `show`, `doctor`, `history`, and `config` run without `os.geteuid` or `/proc`. `clean` and `tui` still require Linux. Windows measurement uses `os.scandir` and does not authorize deletion.
 - Allocated/logical measurements, hardlink deduplication, sparse-file accounting, no-follow traversal, filesystem boundaries, explicit incomplete-scan errors and stable target IDs.
 - Owning-tool cleanup for npm/uv/pip/Cargo; recognized desktop cache files use directory descriptors. Imager OS-list metadata is retained. Expected uv cache-internal links are measured without traversal; external links and environment dependencies block cleanup.
 - Identity, ownership, layout, Git-tracked-output, Cargo configuration, launcher and active-process checks. Unverifiable process visibility blocks cleanup rather than assuming inactivity.

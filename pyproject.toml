@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "workstation-tidy"
 version = "0.1.0"
-description = "Inspect and clean explicitly selected Ubuntu workstation caches and build outputs"
+description = "Inspect and clean explicitly selected caches, build outputs, and regenerable project artifacts"
 requires-python = ">=3.11"
 dependencies = []
 readme = "README.md"

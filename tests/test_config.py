@@ -48,6 +48,13 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(candidates[0].eligible)
         self.assertIn("excluded", candidates[0].reason)
 
+    def test_artifact_discovery_defaults_on_and_can_be_disabled(self):
+        profile = load_profile(path=self.home / "missing.toml", home=self.home)
+        self.assertTrue(profile.discover_artifacts)
+        self.assertFalse(profile.project_roots_explicit)
+        disabled = self.load("discover_artifacts=false\ncargo_targets=[]\n[profiles.test.caches]\n")
+        self.assertFalse(disabled.discover_artifacts)
+
     def test_custom_profile_cache_and_exclusions(self):
         profile = self.load(
             'cargo_targets=[]\nexclude=["~/cache/_cacache"]\n[profiles.test.caches]\nnpm="~/cache/_cacache"\nuv=false\n'

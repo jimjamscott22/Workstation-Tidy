@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 import tomllib
 from dataclasses import dataclass, field
@@ -59,6 +60,11 @@ class ProcessView:
 
 def process_view(proc: Path = Path("/proc")) -> ProcessView:
     view = ProcessView()
+    if not sys.platform.startswith("linux"):
+        view.errors.append(
+            "Process visibility and cleanup require Linux; scan and show can still identify project artifacts"
+        )
+        return view
     try:
         # A sandbox's private PID namespace cannot establish host inactivity.
         if (proc / "1/comm").read_text().strip() not in {"systemd", "init"}:

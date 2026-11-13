@@ -4,7 +4,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
-Kind = Literal["npm", "uv", "pip", "cargo", "thumbnails", "imager", "review"]
+Kind = Literal[
+    "npm",
+    "uv",
+    "pip",
+    "cargo",
+    "thumbnails",
+    "imager",
+    "review",
+    "node_modules",
+    "venv",
+    "tool_cache",
+    "frontend_cache",
+]
 Outcome = Literal["cleaned", "partial", "failed", "skipped", "interrupted"]
 
 
@@ -15,6 +27,7 @@ class Target:
     path: Path
     category: str
     consequence: str
+    detail: str = ""
 
 
 @dataclass
@@ -23,6 +36,7 @@ class Measurement:
     logical_bytes: int = 0
     files: int = 0
     errors: list[str] = field(default_factory=list)
+    newest_mtime: float | None = None
 
 
 @dataclass
