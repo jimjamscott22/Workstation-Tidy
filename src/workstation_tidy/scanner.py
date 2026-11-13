@@ -174,6 +174,16 @@ def _measure_descriptors(
     return _finish(result)
 
 
+def _nofollow_stat(entry: os.DirEntry[str]) -> os.stat_result:
+    """Stat a directory entry without using DirEntry.stat().
+
+    On Windows, DirEntry.stat() returns st_dev and st_ino as 0. Comparing those
+    with the root's real device marks every child as another filesystem, and the
+    shared (0, 0) key collapses unrelated files into one hardlink.
+    """
+    return os.stat(entry.path, follow_symlinks=False)
+
+
 def _allocated_bytes(info: os.stat_result) -> int:
     blocks = getattr(info, "st_blocks", 0) or 0
     if blocks:
@@ -222,7 +232,7 @@ def _measure_scandir(
             return
         for entry in entries:
             try:
-                st = entry.stat(follow_symlinks=False)
+                st = _nofollow_stat(entry)
                 key = st.st_dev, st.st_ino
                 _note_mtime(result, st.st_mtime)
                 linked = entry.is_symlink() or is_reparse(Path(entry.path))

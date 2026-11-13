@@ -174,6 +174,29 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual([target.path for target in targets], [link])
         self.assertFalse(inspect(targets[0]).eligible)
 
+    def test_windows_measure_uses_real_stat_when_direntry_identity_is_zero(self):
+        (self.root / "a").write_bytes(b"one")
+        os.link(self.root / "a", self.root / "a-link")
+        (self.root / "b").write_bytes(b"two")
+        (self.root / "sub").mkdir()
+        (self.root / "sub" / "c").write_bytes(b"three")
+
+        def zero_identity(entry, *, follow_symlinks=True):
+            real = os.stat(entry.path, follow_symlinks=follow_symlinks)
+            values = list(real)
+            values[1] = 0
+            values[2] = 0
+            return os.stat_result(tuple(values))
+
+        with (
+            patch("workstation_tidy.scanner.sys.platform", "win32"),
+            patch("os.DirEntry.stat", zero_identity),
+        ):
+            result = measure(self.root, keep_links=True)
+        self.assertFalse(any("Nested filesystem" in error for error in result.errors))
+        self.assertEqual(result.files, 3)
+        self.assertEqual(result.logical_bytes, len(b"onetwothree"))
+
     def test_windows_measure_skips_owner_checks_and_keeps_links(self):
         (self.root / "file").write_bytes(b"abc")
         (self.root / "link").symlink_to(self.root / "file")

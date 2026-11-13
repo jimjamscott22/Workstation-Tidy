@@ -286,6 +286,49 @@ class SafetyTests(unittest.TestCase):
                 self.handler.preflight(inspect(target), ProcessView())
         self.assertTrue((target.path / "pkg.js").exists())
 
+    def test_nested_git_repository_blocks_artifact_cleanup(self):
+        target = self.artifact()
+        subprocess.run(["git", "init", "-q"], cwd=target.path.parent, check=True)
+        nested = target.path / "vendor" / "pkg"
+        nested.mkdir(parents=True)
+        source = nested / "src.py"
+        source.write_text("local change\n")
+        subprocess.run(["git", "init", "-q"], cwd=nested, check=True)
+        subprocess.run(["git", "add", "src.py"], cwd=nested, check=True)
+        candidate = inspect(target)
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.preflight(candidate, ProcessView())
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.execute(candidate, ["internal:unlink-artifact-tree", str(target.path)])
+        self.assertEqual(source.read_text(), "local change\n")
+        self.assertTrue((nested / ".git").is_dir())
+
+    def test_gitdir_file_inside_artifact_blocks_cleanup(self):
+        target = self.artifact()
+        subprocess.run(["git", "init", "-q"], cwd=target.path.parent, check=True)
+        package = target.path / "pkg"
+        package.mkdir()
+        (package / ".git").write_text("gitdir: /tmp/elsewhere\n")
+        source = package / "main.py"
+        source.write_text("keep\n")
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.preflight(inspect(target), ProcessView())
+        self.assertEqual(source.read_text(), "keep\n")
+
+    def test_unreadable_artifact_subdirectory_blocks_cleanup(self):
+        target = self.artifact()
+        hidden = target.path / "hidden"
+        hidden.mkdir()
+        hidden.chmod(0)
+        try:
+            with self.assertRaisesRegex(TidyError, "nested Git"):
+                self.handler.find_nested_git(target.path)
+            with self.assertRaises(TidyError):
+                self.handler.preflight(inspect(target), ProcessView())
+        finally:
+            hidden.chmod(0o700)
+        self.assertTrue(hidden.is_dir())
+
     def test_artifact_cleanup_unlinks_symlinks_without_following(self):
         target = self.artifact()
         outside = self.home / "interpreter"

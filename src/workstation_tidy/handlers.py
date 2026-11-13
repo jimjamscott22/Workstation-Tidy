@@ -234,6 +234,35 @@ class Handler:
         )
         if tracked.returncode or tracked.stdout:
             raise TidyError("Tracked files or Git inspection failure; cleanup blocked")
+        # ls-files only sees the parent index. A clone inside the artifact has its own
+        # commits, and deleting that .git directory cannot be restored from the lockfile.
+        nested = self.find_nested_git(project / folder)
+        if nested is not None:
+            raise TidyError(
+                f"Nested Git repository at {nested}; cleanup blocked so its history is preserved"
+            )
+
+    @staticmethod
+    def find_nested_git(folder: Path) -> Path | None:
+        def abort(exc: OSError) -> None:
+            raise TidyError(
+                "Could not verify the absence of a nested Git repository; cleanup blocked"
+            ) from exc
+
+        for current, dirs, files in os.walk(folder, followlinks=False, onerror=abort):
+            if ".git" in files or ".git" in dirs:
+                return Path(current) / ".git"
+            kept: list[str] = []
+            for name in dirs:
+                child = Path(current) / name
+                try:
+                    linked = child.is_symlink()
+                except OSError as exc:
+                    abort(exc)
+                if not linked:
+                    kept.append(name)
+            dirs[:] = kept
+        return None
 
     def preview(self, target: Target) -> list[str]:
         path = str(target.path)
