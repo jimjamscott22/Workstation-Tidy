@@ -152,9 +152,11 @@ def check_cargo_settings(target: Path, home: Path) -> None:
                 raise TidyError(f"Cannot verify Cargo configuration: {path}") from exc
 
 
-# Trees that hold dependencies, history or build output for other tools, never a
-# Python environment. Cargo "target" is only skipped beside a Cargo.toml.
-UV_SCAN_PRUNE = frozenset({".git", "node_modules", "__pycache__"})
+# Only trees whose layout is fixed by their tool and which cannot contain a Python
+# environment: git's object store and bytecode caches. Build/dependency directories
+# such as "target" or "node_modules" are scanned, since a project may nest an
+# environment inside them; a scan that runs out of budget defers cleanup instead.
+UV_SCAN_PRUNE = frozenset({".git", "__pycache__"})
 
 
 def cache_link_check(
@@ -178,7 +180,6 @@ def cache_link_check(
             continue
         except OSError as exc:
             raise TidyError(f"Cannot rule out uv cache dependencies: {exc}") from exc
-        cargo_project = any(e.name == "Cargo.toml" for e in entries)
         for entry in entries:
             count += 1
             if count > max_entries or time.monotonic() > deadline:
@@ -193,8 +194,6 @@ def cache_link_check(
                 elif entry.is_dir(follow_symlinks=False):
                     path = Path(entry.path)
                     if path == cache or entry.name in UV_SCAN_PRUNE:
-                        continue
-                    if entry.name == "target" and cargo_project:
                         continue
                     pending.append(path)
             except FileNotFoundError:

@@ -114,24 +114,30 @@ class SafetyTests(unittest.TestCase):
         cache = self.home / ".cache/uv"
         cache.mkdir(parents=True)
         project = self.home / "proj"
-        for heavy in ("node_modules", ".git", "__pycache__", "target"):
+        for heavy in (".git", "__pycache__"):
             (project / heavy).mkdir(parents=True)
             for i in range(30):
                 (project / heavy / f"f{i}").touch()
-        (project / "Cargo.toml").touch()
         venv = project / ".venv"
         venv.mkdir()
         (venv / "pyvenv.cfg").touch()
         (venv / "python").symlink_to("/usr/bin/python3")
         cache_link_check(cache, self.home, max_entries=40)
 
-    def test_uv_scan_checks_target_dirs_without_a_cargo_manifest(self):
+    def test_uv_scan_checks_environments_inside_build_dirs(self):
         cache = self.home / ".cache/uv"
         cache.mkdir(parents=True)
-        (self.home / "data/target").mkdir(parents=True)
-        (self.home / "data/target/pkg").symlink_to(cache / "archive-v0/data")
-        with self.assertRaisesRegex(TidyError, "symlinks"):
-            cache_link_check(cache, self.home)
+        (self.home / "proj/Cargo.toml").parent.mkdir(parents=True)
+        (self.home / "proj/Cargo.toml").touch()
+        for name in ("target", "node_modules"):
+            with self.subTest(name):
+                pkg = self.home / f"proj/{name}/env/lib/site-packages/pkg"
+                pkg.parent.mkdir(parents=True, exist_ok=True)
+                if not pkg.is_symlink():
+                    pkg.symlink_to(cache / "archive-v0/pkg")
+                with self.assertRaisesRegex(TidyError, "symlinks"):
+                    cache_link_check(cache, self.home)
+                pkg.unlink()
 
     def test_uv_scan_blocks_on_unreadable_directory(self):
         cache = self.home / ".cache/uv"
