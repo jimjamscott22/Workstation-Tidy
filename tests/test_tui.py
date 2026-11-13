@@ -272,6 +272,17 @@ class TuiTests(TuiFixture, unittest.IsolatedAsyncioTestCase):
             self.assertTrue(app.screen.query_one("#clean").disabled)
         self.assertTrue(self.file.exists())
 
+    async def test_session_daemons_not_inspected_are_shown(self):
+        app = self.app(processes=lambda: ProcessView(opaque=["PID 3164 ((sd-pam))"]))
+        async with app.run_test() as pilot:
+            await self.scanned(pilot)
+            banner = str(app.screen.query_one("#banner").render())
+            self.assertIn("verified", banner)
+            self.assertIn("1 session daemon not inspected", banner)
+            await pilot.press("d")
+            await self.settle(pilot)
+            self.assertIn("PID 3164 ((sd-pam))", str(app.screen.query_one("#body").render()))
+
     async def test_markup_in_paths_renders_literally(self):
         from workstation_tidy.tui.screens import plain
 

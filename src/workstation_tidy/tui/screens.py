@@ -137,6 +137,11 @@ class ScanScreen(TidyScreen):
             text.append(" — preflight will skip cleanup until this is resolved (see Doctor).")
         else:
             text.append("✓ Process visibility verified", "bold")
+            if view is not None and view.opaque:
+                count = len(view.opaque)
+                text.append(
+                    f" · {count} session daemon{'s' if count != 1 else ''} not inspected (see Doctor)"
+                )
         for error in errors:
             text.append("\n⚠ ")
             text.append(safe(error))
@@ -633,6 +638,10 @@ def doctor_report(app: TidyApp) -> Text:
         )
     else:
         text.append("verified\n", "bold green")
+    if view.opaque:
+        text.append("  Not inspected (session daemons that hide their open files):\n")
+        for entry in view.opaque:
+            text.append(f"    {safe(entry)}\n")
     text.append("\nDiscovery\n", "bold underline")
     for error in errors or ["No discovery errors."]:
         text.append(f"  {safe(error)}\n")
