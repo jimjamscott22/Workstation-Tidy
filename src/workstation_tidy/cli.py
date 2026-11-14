@@ -13,8 +13,10 @@ from .common import (
     collect,
     filter_candidates,
     human,
+    modified_text,
     preflight_selected,
     safe,
+    split_detail,
 )
 from .config import Profile, config_path, load_profile, state_path
 from .handlers import Handler
@@ -30,6 +32,14 @@ def size_argument(value: str) -> int:
         raise argparse.ArgumentTypeError("Use bytes or a size such as 500MiB or 2G")
     suffix = (match[2] or "B").upper()[0]
     return int(float(match[1]) * 1024 ** "BKMGT".index(suffix))
+
+
+def age_argument(value: str) -> float:
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(d|h)", value.strip(), re.IGNORECASE)
+    if not match:
+        raise argparse.ArgumentTypeError("Use a duration such as 90d or 12h")
+    amount = float(match[1])
+    return amount * (86400 if match[2].lower() == "d" else 3600)
 
 
 def parser() -> argparse.ArgumentParser:
@@ -59,6 +69,12 @@ def parser() -> argparse.ArgumentParser:
             sub.add_argument("--json", action="store_true", help="Emit a versioned JSON report")
         if name in {"scan", "clean"}:
             sub.add_argument("--min-size", type=size_argument, default=0)
+            sub.add_argument(
+                "--older-than",
+                type=age_argument,
+                default=None,
+                help="Only targets whose newest file is older than this, such as 90d or 12h",
+            )
             sub.add_argument("--category", choices=("packages", "build", "desktop", "review"))
         if name in {"clean", "tui"}:
             sub.add_argument(
@@ -87,6 +103,10 @@ def display(candidates: list[Candidate]) -> None:
             f"{index:>3}. {human(candidate.size.allocated_bytes):>11}  {target.category:8}  {status:14} {safe(target.id)}"
         )
         print(f"     {safe(target.path)}")
+        project, marker = split_detail(target.detail)
+        if project or marker:
+            print(f"     project {safe(project)}  marker {safe(marker)}")
+        print(f"     {safe(modified_text(candidate.size.newest_mtime))}")
         print(f"     {safe(candidate.reason)}")
 
 
@@ -179,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         parser().print_help()
         return 0
     try:
-        check_environment()
+        check_environment(args.command)
         profile = load_profile(args.profile, args.config)
         if args.command == "tui":
             return launch_tui(profile, args.dry_run, args.config)
@@ -191,6 +211,7 @@ def main(argv: list[str] | None = None) -> int:
                     "profile": profile.name,
                     "project_roots": [str(p) for p in profile.project_roots],
                     "discover_cargo": profile.discover_cargo,
+                    "discover_artifacts": profile.discover_artifacts,
                     "exclusions": [str(p) for p in profile.exclude],
                     "targets": [
                         {"id": t.id, "kind": t.kind, "path": str(t.path)} for t in profile.targets
@@ -246,6 +267,10 @@ def main(argv: list[str] | None = None) -> int:
                 raise TidyError("Target not found; use scan to list IDs and paths")
             candidate = matched[0]
             value = candidate.to_dict()
+            project, marker = split_detail(candidate.target.detail)
+            value["project"] = project or None
+            value["marker"] = marker or None
+            value["modified"] = modified_text(candidate.size.newest_mtime)
             try:
                 value["operation"] = (
                     Handler(profile).preview(candidate.target) if candidate.eligible else None
@@ -254,7 +279,9 @@ def main(argv: list[str] | None = None) -> int:
                 value["operation"] = None
             report(value, args.json)
             return 0
-        candidates = filter_candidates(candidates, args.min_size, args.category)
+        candidates = filter_candidates(
+            candidates, args.min_size, args.category, older_than=args.older_than
+        )
         if args.command == "scan":
             if args.json:
                 report(

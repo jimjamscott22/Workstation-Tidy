@@ -246,6 +246,142 @@ class SafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(TidyError, "Tracked"):
                 self.handler.preflight(inspect(target), ProcessView())
 
+    def artifact(self, kind="node_modules", name="node_modules", marker="package-lock.json"):
+        project = self.home / "app"
+        folder = project / name
+        folder.mkdir(parents=True, exist_ok=True)
+        (project / "package.json").write_text("{}\n")
+        (project / "package-lock.json").write_text("{}\n")
+        (project / "pyproject.toml").write_text("[project]\nname='app'\n")
+        if kind == "venv":
+            (folder / "pyvenv.cfg").write_text("home = /usr\n")
+        return Target(
+            "artifact-test",
+            kind,
+            folder,
+            "build",
+            "reinstall",
+            f"project={project}; marker={marker}",
+        )
+
+    def test_node_modules_without_lockfile_is_blocked(self):
+        target = self.artifact()
+        (target.path.parent / "package-lock.json").unlink()
+        with self.assertRaisesRegex(TidyError, "lockfile"):
+            self.handler.preflight(inspect(target), ProcessView())
+        self.assertTrue(target.path.exists())
+
+    def test_tracked_artifact_is_blocked(self):
+        target = self.artifact()
+        (target.path / "pkg.js").write_bytes(b"code")
+        replies = [
+            subprocess.CompletedProcess([], 0, "repo", ""),
+            subprocess.CompletedProcess([], 0, "node_modules/pkg.js\0", ""),
+        ]
+        with (
+            patch("workstation_tidy.handlers.run_command", side_effect=replies),
+            patch("shutil.which", return_value="/bin/git"),
+        ):
+            with self.assertRaisesRegex(TidyError, "Tracked"):
+                self.handler.preflight(inspect(target), ProcessView())
+        self.assertTrue((target.path / "pkg.js").exists())
+
+    def test_nested_git_repository_blocks_artifact_cleanup(self):
+        target = self.artifact()
+        subprocess.run(["git", "init", "-q"], cwd=target.path.parent, check=True)
+        nested = target.path / "vendor" / "pkg"
+        nested.mkdir(parents=True)
+        source = nested / "src.py"
+        source.write_text("local change\n")
+        subprocess.run(["git", "init", "-q"], cwd=nested, check=True)
+        subprocess.run(["git", "add", "src.py"], cwd=nested, check=True)
+        candidate = inspect(target)
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.preflight(candidate, ProcessView())
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.execute(candidate, ["internal:unlink-artifact-tree", str(target.path)])
+        self.assertEqual(source.read_text(), "local change\n")
+        self.assertTrue((nested / ".git").is_dir())
+
+    def test_gitdir_file_inside_artifact_blocks_cleanup(self):
+        target = self.artifact()
+        subprocess.run(["git", "init", "-q"], cwd=target.path.parent, check=True)
+        package = target.path / "pkg"
+        package.mkdir()
+        (package / ".git").write_text("gitdir: /tmp/elsewhere\n")
+        source = package / "main.py"
+        source.write_text("keep\n")
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.preflight(inspect(target), ProcessView())
+        self.assertEqual(source.read_text(), "keep\n")
+
+    def test_unreadable_artifact_subdirectory_blocks_cleanup(self):
+        target = self.artifact()
+        hidden = target.path / "hidden"
+        hidden.mkdir()
+        hidden.chmod(0)
+        try:
+            with self.assertRaisesRegex(TidyError, "nested Git"):
+                self.handler.find_nested_git(target.path)
+            with self.assertRaises(TidyError):
+                self.handler.preflight(inspect(target), ProcessView())
+        finally:
+            hidden.chmod(0o700)
+        self.assertTrue(hidden.is_dir())
+
+    def test_artifact_cleanup_unlinks_symlinks_without_following(self):
+        target = self.artifact()
+        outside = self.home / "interpreter"
+        outside.write_bytes(b"python")
+        (target.path / "python").symlink_to(outside)
+        (target.path / "pkg").mkdir()
+        (target.path / "pkg" / "index.js").write_bytes(b"code")
+        subprocess.run(["git", "init", "-q"], cwd=target.path.parent, check=True)
+        candidate = inspect(target)
+        self.assertTrue(candidate.eligible)
+        command = self.handler.preflight(candidate, ProcessView())
+        self.assertEqual(command[0], "internal:unlink-artifact-tree")
+        self.assertEqual(self.handler.execute(candidate, command), 0)
+        self.assertFalse(target.path.exists())
+        self.assertEqual(outside.read_bytes(), b"python")
+        self.assertTrue((target.path.parent / "package.json").exists())
+
+    def test_special_file_stops_artifact_cleanup(self):
+        target = self.artifact()
+        pipe = target.path / "pipe"
+        os.mkfifo(pipe)
+        candidate = inspect(target)
+        self.assertFalse(candidate.eligible)
+        with self.assertRaisesRegex(TidyError, "Special file"):
+            self.handler.unlink_artifact(candidate)
+        self.assertTrue(pipe.exists())
+
+    def test_unrelated_node_process_does_not_block_artifact(self):
+        target = self.artifact()
+        ProcessView([Process("node")]).check(target)
+        with self.assertRaisesRegex(TidyError, "in use"):
+            ProcessView([Process("node", (target.path / "pkg.js",))]).check(target)
+
+    def test_ambiguous_directory_is_report_only(self):
+        folder = self.home / "app" / "dist"
+        folder.mkdir(parents=True)
+        target = Target(
+            "artifact-dist",
+            "review",
+            folder,
+            "review",
+            "Ambiguous build directory; reported for review and never deleted automatically.",
+            f"project={folder.parent}; marker=package.json",
+        )
+        with self.assertRaisesRegex(TidyError, "Report-only"):
+            self.handler.preview(target)
+
+    def test_windows_process_view_does_not_read_proc(self):
+        with patch("workstation_tidy.safety.sys.platform", "win32"):
+            view = process_view(self.home / "missing-proc")
+        self.assertTrue(view.errors)
+        self.assertIn("Linux", view.errors[0])
+
     def test_cargo_command_pins_both_output_directories(self):
         target = self.target("app/target", "cargo")
         with patch("shutil.which", return_value="/usr/bin/cargo"):

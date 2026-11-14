@@ -1,10 +1,10 @@
 # Workstation Tidy
 
-A small, local Python CLI for Ubuntu developer and desktop cleanup:
+A small, local Python CLI for cleaning up after development:
 
 **Scan → explain → select → preview → confirm → clean → verify.**
 
-Python 3.11+ and Linux are required. The CLI has no third-party runtime dependencies; the optional TUI uses [Textual](https://textual.textualize.io/). Cleanup tools (`npm`, `uv`, `pip3`, Cargo and Git) are optional: missing tools block their handlers while leaving reports available.
+Python 3.11+ is required. Cleanup runs on Linux. `scan`, `show`, `doctor`, `history`, and `config` also run on Windows and identify the same regenerable project folders there; `clean` and `tui` stay on Linux, where open files can be checked. The CLI has no third-party runtime dependencies; the optional TUI uses [Textual](https://textual.textualize.io/). Cleanup tools (`npm`, `uv`, `pip3`, Cargo and Git) are optional: missing tools block their handlers while leaving reports available.
 
 ## Run
 
@@ -14,6 +14,7 @@ From this project:
 uv sync
 uv run workstation-tidy scan
 uv run workstation-tidy scan --min-size 500MiB
+uv run workstation-tidy scan --older-than 90d
 uv run workstation-tidy show imager
 uv run workstation-tidy clean --dry-run
 uv run workstation-tidy clean
@@ -56,7 +57,7 @@ uv tool install '.[tui]'                       # optional global install
 | d / h / c | Doctor, history and configuration views |
 | q | Quit (blocked while cleanup is running) |
 
-The category menu and minimum-size box filter the table. A banner shows whether process visibility is verified. From the preview, **Clean…** opens a confirmation that only proceeds when you type `CLEAN`. While cleaning, results appear as each target finishes; **Stop after current target** skips the remaining targets but does not interrupt the operation already running. History is written exactly as for the CLI.
+The category menu, minimum-size box, and older-than box filter the table. A banner shows whether process visibility is verified. The detail pane shows size, age, the parent project, and the marker that qualified a discovered folder. From the preview, **Clean…** opens a confirmation that only proceeds when you type `CLEAN`. While cleaning, results appear as each target finishes; **Stop after current target** skips the remaining targets but does not interrupt the operation already running. History is written exactly as for the CLI.
 
 ## What v1 cleans
 
@@ -66,6 +67,14 @@ The category menu and minimum-size box filter the table. A banner shows whether 
 - Recognized Cargo `target` output beside a manifest, after checking Git-tracked files, configuration, desktop launchers and running processes. Explicit arguments constrain both artifact and intermediate directories.
 - GNOME thumbnail PNGs in recognized cache directories.
 - Raspberry Pi Imager's recognized `lastdownload.cache` file.
+- `node_modules` beside `package.json` when a lockfile is present (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, or `bun.lockb`).
+- `.venv` and `venv` directories that contain `pyvenv.cfg`.
+- `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, and `.tox` beside a Python project file.
+- `.next`, `.nuxt`, `.turbo`, and `.parcel-cache` beside `package.json`.
+
+The same search reports `dist`, `build`, `out`, `coverage`, and `htmlcov` when a project file sits beside them, and does not delete those. A `node_modules` folder without a lockfile is listed and blocked. `__pycache__` is not listed.
+
+Discovery is on by default under `project_roots` (normally `~/Desktop/GitHub-Repos`). It does not follow symlinks or junctions, does not enter `node_modules`, virtualenvs, `.git`, Cargo `target`, or other recognized artifact directories, and stops at a depth of 12. Set `discover_artifacts = false` to opt out. A missing default root is skipped. A root you configured that cannot be read fails the scan.
 
 The default `usual` profile includes the eight Cargo output paths from the October 2026 cleanup. It also reports JetBrains, Cursor, Chrome, LM Studio and downloaded browser runtimes without deleting them. Missing folders are normal after cleanup and are reported as such.
 
@@ -80,7 +89,8 @@ Choose another profile with `--profile NAME`, or another file with `--config /ab
 - Paths must be absolute or begin with `~/`, without `..`. Cleanup locations and discovery roots must be below your home directory.
 - Omitting `caches` uses all standard cache locations. Supplying the table selects only its entries; `false` disables an entry. Desktop-cache paths must match the standard layout.
 - Omitting `cargo_targets` uses the eight historical paths. Set `cargo_targets = []` to opt out.
-- `discover_cargo = true` discovers additional manifests with existing `target` folders under `project_roots`, including worktrees. It skips symlinks, other filesystems, dependencies, Git internals and virtual environments, with a depth limit of 12. Limits and discovery failures are reported.
+- `discover_artifacts` defaults to true. It records regenerable project folders under `project_roots` and reports ambiguous build directories without deleting them. `--older-than 90d` (or `12h`) keeps rows whose newest file is at least that old.
+- `discover_cargo = true` discovers additional manifests with existing `target` folders under `project_roots`, including worktrees. It skips symlinks, other filesystems, dependencies, Git internals, virtual environments, and recognized artifact directories, with a depth limit of 12. Limits and discovery failures are reported.
 - Exclusions are literal path subtrees. A target containing an excluded child is blocked entirely because owning tools cannot honor arbitrary exclusions.
 - Profiles contain locations and preferences only; command strings are rejected.
 
@@ -88,7 +98,7 @@ Choose another profile with `--profile NAME`, or another file with `--config /ab
 
 Scans read directory metadata; they do not inspect personal file contents. Preflight reads relevant manifests/configuration, cache markers, Git file lists and desktop launcher definitions. Target paths, outcomes and measurements are stored; credentials and raw external-tool output are not logged.
 
-Symlinked paths, unknown layouts, inaccessible entries, changed identities, active targets, unsupported Cargo overrides and incomplete process visibility block cleanup. uv dependency inspection walks metadata under your home directory, skipping `.git`, `node_modules`, `__pycache__` and Cargo `target` folders beside a `Cargo.toml`, with a 3,000,000-entry/20-second limit; reaching the limit blocks cleanup. Scans identify candidates, not guarantees that preflight will pass.
+Symlinked paths, unknown layouts, inaccessible entries, changed identities, active targets, unsupported Cargo overrides and incomplete process visibility block cleanup. Project-artifact cleanup also requires Git to confirm the folder is untracked, refuses when a nested Git repository is inside it, and refuses when any process has the folder open. Symlinks inside `node_modules` and virtualenvs are unlinked as links and are not followed, so a pnpm store or a system Python stays in place. uv dependency inspection walks metadata under your home directory, skipping `.git`, `node_modules`, `__pycache__` and Cargo `target` folders beside a `Cargo.toml`, with a 3,000,000-entry/20-second limit; reaching the limit blocks cleanup. Scans identify candidates, not guarantees that preflight will pass.
 
 Process checks require the host Linux PID namespace. A sandbox, container, `/proc` restrictions or protected processes can prevent verification: `doctor` explains this and cleanup is deferred. Run from your normal host terminal without sudo. The app never escalates or terminates processes.
 

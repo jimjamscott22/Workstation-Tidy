@@ -11,7 +11,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .config import CACHE_PATHS, Profile
+from .config import (
+    ARTIFACT_KINDS,
+    CACHE_PATHS,
+    FRONTEND_DIRS,
+    LOCKFILES,
+    PYTHON_MARKERS,
+    TOOL_CACHE_DIRS,
+    Profile,
+)
 from .models import Candidate, Target, TidyError
 from .safety import (
     ProcessView,
@@ -20,7 +28,7 @@ from .safety import (
     check_launchers,
     validate_identity,
 )
-from .scanner import inspect
+from .scanner import inspect, is_regular_file
 
 
 def run_command(
@@ -136,6 +144,8 @@ class Handler:
                 raise TidyError("Imager download is not a regular file")
             if any(name != "lastdownload.cache" and not (path / name).is_dir() for name in names):
                 raise TidyError("Unexpected Imager OS-list metadata layout")
+        elif target.kind in ARTIFACT_KINDS:
+            self.check_artifact(target)
         else:
             raise TidyError("Report-only target; no cleanup handler")
 
@@ -183,6 +193,76 @@ class Handler:
         )
         if tracked.returncode or tracked.stdout:
             raise TidyError("Tracked output files or Git inspection failure; cleanup blocked")
+
+    def check_artifact(self, target: Target) -> None:
+        path = target.path
+        if path.is_symlink() or not path.is_dir():
+            raise TidyError("Artifact is not a real directory")
+        parent = path.parent
+        name = path.name
+        if target.kind == "node_modules":
+            if name != "node_modules" or not is_regular_file(parent / "package.json"):
+                raise TidyError("Expected node_modules beside a regular package.json")
+            if not any(is_regular_file(parent / lock) for lock in LOCKFILES):
+                raise TidyError(
+                    "No lockfile beside node_modules; reinstall may not be reproducible"
+                )
+        elif target.kind == "venv":
+            if name not in {".venv", "venv"} or not is_regular_file(path / "pyvenv.cfg"):
+                raise TidyError("Expected a virtual environment containing pyvenv.cfg")
+        elif target.kind == "tool_cache":
+            if name not in TOOL_CACHE_DIRS or not any(
+                is_regular_file(parent / marker) for marker in PYTHON_MARKERS
+            ):
+                raise TidyError("Expected a Python tool cache beside a project marker")
+        elif target.kind == "frontend_cache":
+            if name not in FRONTEND_DIRS or not is_regular_file(parent / "package.json"):
+                raise TidyError("Expected a frontend build directory beside package.json")
+        else:
+            raise TidyError("Report-only target; no cleanup handler")
+        self.check_untracked(parent, name)
+
+    def check_untracked(self, project: Path, folder: str) -> None:
+        git = shutil.which("git")
+        if not git:
+            raise TidyError("git is required to check tracked files before artifact cleanup")
+        repo = run_command([git, "-C", str(project), "rev-parse", "--show-toplevel"], cwd=project)
+        if repo.returncode:
+            raise TidyError("Project is not in an inspectable Git repository")
+        tracked = run_command(
+            [git, "-C", str(project), "ls-files", "-z", "--", folder], cwd=project
+        )
+        if tracked.returncode or tracked.stdout:
+            raise TidyError("Tracked files or Git inspection failure; cleanup blocked")
+        # ls-files only sees the parent index. A clone inside the artifact has its own
+        # commits, and deleting that .git directory cannot be restored from the lockfile.
+        nested = self.find_nested_git(project / folder)
+        if nested is not None:
+            raise TidyError(
+                f"Nested Git repository at {nested}; cleanup blocked so its history is preserved"
+            )
+
+    @staticmethod
+    def find_nested_git(folder: Path) -> Path | None:
+        def abort(exc: OSError) -> None:
+            raise TidyError(
+                "Could not verify the absence of a nested Git repository; cleanup blocked"
+            ) from exc
+
+        for current, dirs, files in os.walk(folder, followlinks=False, onerror=abort):
+            if ".git" in files or ".git" in dirs:
+                return Path(current) / ".git"
+            kept: list[str] = []
+            for name in dirs:
+                child = Path(current) / name
+                try:
+                    linked = child.is_symlink()
+                except OSError as exc:
+                    abort(exc)
+                if not linked:
+                    kept.append(name)
+            dirs[:] = kept
+        return None
 
     def preview(self, target: Target) -> list[str]:
         path = str(target.path)
@@ -240,6 +320,8 @@ class Handler:
             ]
         if target.kind in {"thumbnails", "imager"}:
             return ["internal:unlink-recognized-cache-files", path]
+        if target.kind in ARTIFACT_KINDS:
+            return ["internal:unlink-artifact-tree", path]
         raise TidyError("Report-only target")
 
     @staticmethod
@@ -254,6 +336,9 @@ class Handler:
         self.check_layout(candidate.target)
         if candidate.target.kind in {"thumbnails", "imager"}:
             self.unlink_desktop(candidate)
+            return 0
+        if candidate.target.kind in ARTIFACT_KINDS:
+            self.unlink_artifact(candidate)
             return 0
         # Remove unrelated package-manager configuration from the child, and
         # avoid writing npm logs outside the selected cache.
@@ -317,9 +402,56 @@ class Handler:
             os.close(root)
 
     @staticmethod
+    def unlink_artifact(candidate: Candidate) -> None:
+        """Remove an artifact tree, unlinking symlinks without following them."""
+        path = candidate.target.path
+        root = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+        def unlink_tree(fd: int, device: int) -> None:
+            for name in os.listdir(fd):
+                entry = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if entry.st_uid != os.getuid():
+                    raise TidyError("Artifact ownership changed")
+                if stat.S_ISLNK(entry.st_mode):
+                    os.unlink(name, dir_fd=fd)
+                    continue
+                if entry.st_dev != device:
+                    raise TidyError("Artifact filesystem changed")
+                if stat.S_ISDIR(entry.st_mode):
+                    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    try:
+                        unlink_tree(child, device)
+                    finally:
+                        os.close(child)
+                    os.rmdir(name, dir_fd=fd)
+                elif stat.S_ISREG(entry.st_mode):
+                    os.unlink(name, dir_fd=fd)
+                else:
+                    raise TidyError("Special file present; cleanup stopped")
+
+        try:
+            info = os.fstat(root)
+            if (info.st_dev, info.st_ino) != candidate.identity:
+                raise TidyError("Artifact directory identity changed")
+            unlink_tree(root, info.st_dev)
+        finally:
+            os.close(root)
+        try:
+            os.rmdir(path)
+        except OSError as exc:
+            raise TidyError(
+                f"Artifact directory could not be removed: {exc.strerror or exc}"
+            ) from exc
+
+    @staticmethod
     def has_payload(target: Target) -> bool:
         if not target.path.exists():
             return False
+        if target.kind in ARTIFACT_KINDS:
+            try:
+                return any(target.path.iterdir())
+            except OSError:
+                return True
         if target.kind == "imager":
             return os.path.lexists(target.path / "lastdownload.cache")
         ignored = {"CACHEDIR.TAG", ".lock", ".gitignore"}

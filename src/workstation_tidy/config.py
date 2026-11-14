@@ -31,7 +31,37 @@ CONSEQUENCES = {
     "cargo": "Compiled applications, dependencies and installers are removed; rebuilding takes longer.",
     "thumbnails": "Image previews will be regenerated.",
     "imager": "The last downloaded OS image must be downloaded again.",
+    "node_modules": "Installed dependencies are removed; reinstall them from the lockfile.",
+    "venv": "The virtual environment is removed; recreate it from the project requirements.",
+    "tool_cache": "The tool cache is removed; the next run of the tool will recreate it.",
+    "frontend_cache": "Framework build output is removed; the next build will recreate it.",
 }
+AMBIGUOUS_CONSEQUENCE = (
+    "Ambiguous build directory; reported for review and never deleted automatically."
+)
+LOCKFILES = ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb")
+PYTHON_MARKERS = ("pyproject.toml", "setup.cfg", "setup.py", "requirements.txt")
+FRONTEND_DIRS = (".next", ".nuxt", ".turbo", ".parcel-cache")
+TOOL_CACHE_DIRS = (".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox")
+AMBIGUOUS_DIRS = ("dist", "build", "out", "coverage", "htmlcov")
+AMBIGUOUS_MARKERS = ("package.json", "pyproject.toml", "Cargo.toml")
+ARTIFACT_KINDS = ("node_modules", "venv", "tool_cache", "frontend_cache")
+# Recognized artifact directories are recorded, then left unopened. Cargo `target`
+# stays with Cargo discovery. `__pycache__` is pruned so bytecode folders do not
+# flood the report.
+DESCENT_PRUNE = frozenset(
+    {
+        ".git",
+        "node_modules",
+        ".venv",
+        "venv",
+        "target",
+        "__pycache__",
+        *TOOL_CACHE_DIRS,
+        *FRONTEND_DIRS,
+        *AMBIGUOUS_DIRS,
+    }
+)
 REVIEW_PATHS = (
     (
         "jetbrains-cache",
@@ -71,6 +101,8 @@ class Profile:
     project_roots: tuple[Path, ...]
     exclude: tuple[Path, ...]
     discover_cargo: bool
+    discover_artifacts: bool = True
+    project_roots_explicit: bool = False
 
 
 def config_path() -> Path:
@@ -128,14 +160,18 @@ def load_profile(
         "cargo_targets",
         "exclude",
         "discover_cargo",
+        "discover_artifacts",
         "caches",
         "review",
     }:
         raise TidyError("Unknown profile keys; arbitrary commands are not supported")
-    if not isinstance(data.get("discover_cargo", False), bool) or not isinstance(
-        data.get("review", True), bool
+    if (
+        not isinstance(data.get("discover_cargo", False), bool)
+        or not isinstance(data.get("discover_artifacts", True), bool)
+        or not isinstance(data.get("review", True), bool)
     ):
-        raise TidyError("discover_cargo and review must be booleans")
+        raise TidyError("discover_cargo, discover_artifacts, and review must be booleans")
+    roots_explicit = "project_roots" in data
     roots = tuple(
         expand(p, home) for p in string_list(data, "project_roots", ["~/Desktop/GitHub-Repos"])
     )
@@ -180,4 +216,13 @@ def load_profile(
         if any(p in target.path.parents or target.path in p.parents for p in seen):
             raise TidyError(f"Overlapping targets: {target.path}")
         seen.append(target.path)
-    return Profile(name, home, tuple(targets), roots, exclude, data.get("discover_cargo", False))
+    return Profile(
+        name,
+        home,
+        tuple(targets),
+        roots,
+        exclude,
+        data.get("discover_cargo", False),
+        data.get("discover_artifacts", True),
+        roots_explicit,
+    )

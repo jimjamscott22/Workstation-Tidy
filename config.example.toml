@@ -5,6 +5,9 @@ version = 1
 # Alternatively specify selected outputs: cargo_targets = ["~/projects/app/target"]
 project_roots = ["~/Desktop/GitHub-Repos"]
 discover_cargo = false
+# Finds regenerable project folders (node_modules, virtualenvs, tool caches).
+# Set false to keep the report to the explicit caches and Cargo paths above.
+discover_artifacts = true
 exclude = []
 review = true
 
@@ -19,6 +22,7 @@ imager = "~/.cache/Raspberry Pi/Imager"
 cargo_targets = []
 project_roots = []
 discover_cargo = false
+discover_artifacts = false
 review = false
 
 [profiles.desktop.caches]
