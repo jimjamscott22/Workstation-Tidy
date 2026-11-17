@@ -180,7 +180,7 @@ class Handler:
         for current, _, files in os.walk(path, followlinks=False):
             if "Cargo.toml" in files or "Cargo.lock" in files:
                 raise TidyError("Project files found inside build output")
-        self.check_git_untracked(path.parent, "target")
+        self.check_untracked(path.parent, "target")
 
     def check_artifact(self, target: Target) -> None:
         path = target.path
@@ -264,6 +264,10 @@ class Handler:
         for current, dirs, files in os.walk(folder, followlinks=False, onerror=abort):
             if ".git" in files or ".git" in dirs:
                 return Path(current) / ".git"
+            # A bare clone stores its history directly, without a .git entry.
+            # Conservatively preserve recognizable repository layouts as well.
+            if "HEAD" in files and {"objects", "refs"} <= set(dirs):
+                return Path(current)
             kept: list[str] = []
             for name in dirs:
                 child = Path(current) / name

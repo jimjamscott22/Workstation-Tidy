@@ -168,6 +168,63 @@ class GitAuthorizationTests(unittest.TestCase):
             with self.assertRaisesRegex(TidyError, "Git inspection failure"):
                 self.handler.check_layout(target)
 
+    def test_nested_repositories_are_rejected_by_both_handlers(self):
+        for kind in ("node_modules", "cargo"):
+            for layout in ("directory", "gitfile", "bare"):
+                with self.subTest(kind=kind, layout=layout):
+                    target = self.fixture(kind, self.home / f"{kind}-{layout}")
+                    nested = target.path / "debug/vendor"
+                    nested.mkdir(parents=True)
+                    if layout == "directory":
+                        self.git(nested, "init", "-q")
+                        (nested / "source.py").write_text("local source")
+                        self.git(nested, "add", "source.py")
+                        self.git(
+                            nested,
+                            "-c",
+                            "user.name=Fixture",
+                            "-c",
+                            "user.email=fixture@example.invalid",
+                            "commit",
+                            "-qm",
+                            "local only",
+                        )
+                    elif layout == "gitfile":
+                        (nested / ".git").write_text("gitdir: /fixture/unavailable\n")
+                    else:
+                        self.git(nested, "init", "--bare", "-q")
+                    with self.assertRaisesRegex(TidyError, "Nested Git"):
+                        self.handler.check_layout(target)
+                    self.assertTrue(nested.exists())
+                    if layout == "directory":
+                        self.assertEqual((nested / "source.py").read_text(), "local source")
+
+    def test_unreadable_cargo_descendant_blocks_layout_validation(self):
+        target = self.fixture("cargo")
+        hidden = target.path / "debug/hidden"
+        hidden.mkdir()
+        hidden.chmod(0)
+        try:
+            with self.assertRaisesRegex(TidyError, "nested Git"):
+                self.handler.check_layout(target)
+        finally:
+            hidden.chmod(0o700)
+
+    @unittest.skipUnless(shutil.which("cargo"), "Cargo unavailable")
+    def test_cargo_rechecks_nested_repository_after_preflight(self):
+        target = self.fixture("cargo")
+        candidate = inspect(target)
+        command = self.handler.preflight(candidate, ProcessView())
+        nested = target.path / "debug/new-repository"
+        nested.mkdir()
+        self.git(nested, "init", "-q")
+        source = nested / "source.py"
+        source.write_text("preserve local work")
+        with self.assertRaisesRegex(TidyError, "Nested Git"):
+            self.handler.execute(candidate, command)
+        self.assertEqual(source.read_text(), "preserve local work")
+        self.assertTrue((nested / ".git").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
