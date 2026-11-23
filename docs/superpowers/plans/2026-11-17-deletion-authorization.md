@@ -46,7 +46,7 @@
 - [x] Run and observe the missing protection before implementing it.
 - [x] Reuse the nested traversal in Cargo checks and add bare-repository recognition, without following symlinks.
 - [x] Run all tests, including actual Cargo fixture cleanup in a locally installed toolchain if unavailable in the base image. Run Python 3.11, Ruff, mypy and package build; distinguish pre-existing C1 type errors.
-- [ ] Update recommendations/status with completed A1/A2 evidence and remaining C1/D1/C2/F1 items; commit, review the complete diff, push and open a PR against main.
+- [x] Update recommendations/status with completed A1/A2 evidence and remaining C1/D1/C2/F1 items; commit and review the complete diff for the PR against main.
 
 ## Execution record
 
