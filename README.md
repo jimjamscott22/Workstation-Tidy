@@ -48,6 +48,8 @@ uv tool install '.[tui]'                       # optional global install
 
 `--profile` and `--config` work as for other commands. Without the extra, `tui` prints the install command and exits 1; every other command keeps working.
 
+![Workstation Tidy in dry-run mode with demo data, showing scan filters and the details for one selected cleanup candidate](docs/tui-screenshot.png)
+
 | Key | Action |
 | --- | --- |
 | ↑/↓ | Move; the panel below explains the highlighted target |
