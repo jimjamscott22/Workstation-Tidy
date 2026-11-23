@@ -20,6 +20,20 @@ class ToolIntegrationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix="workstation-tidy-tools-")
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
+        # Keep rustup's installed toolchain available after redirecting HOME.
+        rustup_home = os.environ.get("RUSTUP_HOME") or str(Path.home() / ".rustup")
+        scope = patch.dict(
+            os.environ,
+            {
+                "HOME": str(self.home),
+                "XDG_CONFIG_HOME": str(self.home / "config"),
+                "XDG_STATE_HOME": str(self.home / "state"),
+                "XDG_CACHE_HOME": str(self.home / "cache"),
+                "RUSTUP_HOME": rustup_home,
+            },
+        )
+        scope.start()
+        self.addCleanup(scope.stop)
         self.handler = Handler(Profile("fixture", self.home, (), (), (), False))
 
     def execute(self, kind, rel):

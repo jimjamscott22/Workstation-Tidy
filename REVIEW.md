@@ -1,5 +1,19 @@
 # Workstation Tidy review
 
+## Batch 1 resolution (November 17, 2026)
+
+A1 and A2 are addressed by the deletion-authorization changes on this branch.
+Git inspection now uses a sanitized environment and validates its worktree root;
+Cargo and artifact cleanup both reject nested `.git` entries and recognizable
+bare repositories. Execution repeats these checks. Nine real-Git authorization
+tests were added; all 110 tests pass on Python 3.11.18 and 3.12.14, without skips,
+including the four real-tool integrations with Cargo 1.91.1 available. An
+independent review found no remaining defects in this scoped batch.
+
+C1, D1, C2 and F1 remain open; Batch 2 (C1, Textual API compatibility) is next.
+Mypy still reports C1's two existing override errors. The original review and
+baseline evidence below describe the reviewed commit, not the fixed branch.
+
 ## Summary
 
 Reviewed commit `a4ed501663daaea9156221669f4398f81e40bb6d` on Linux, using Python 3.12.14 and a separate Python 3.11.18 environment. The core is small and clearly separated, with useful fail-closed measurement, exclusion, identity, process-visibility and history safeguards. The existing suite passes on both interpreters (100 passed, one Cargo integration skipped per run), but it misses two deletion-safety failures: inherited Git environment settings can conceal tracked files, and Cargo output validation can authorize removal of nested Git history. Mypy also fails against the locked Textual dependency. This is a review only: no fixes, source/test/manifest edits, commits, environment configuration updates or publication were performed. The only repository change is this report; the only review-driven deletion was inside a disposable fixture with HOME and all three XDG directories redirected inside it.
@@ -234,21 +248,35 @@ from pathlib import Path
 from unittest.mock import patch
 from workstation_tidy.safety import cache_link_check
 from workstation_tidy.models import TidyError
+
+
 class Entry:
-    def is_symlink(self): return False
-    def is_dir(self, *, follow_symlinks): return False
+    def is_symlink(self):
+        return False
+
+    def is_dir(self, *, follow_symlinks):
+        return False
+
+
 class Listing:
     count = 0
-    def __enter__(self): return self
-    def __exit__(self, *args): pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
     def __iter__(self):
         for _ in range(10_000):
             self.count += 1
             yield Entry()
+
+
 listing = Listing()
-with patch('workstation_tidy.safety.os.scandir', return_value=listing):
+with patch("workstation_tidy.safety.os.scandir", return_value=listing):
     try:
-        cache_link_check(Path('/fixture/cache'), Path('/fixture'), max_entries=1)
+        cache_link_check(Path("/fixture/cache"), Path("/fixture"), max_entries=1)
     except TidyError as exc:
         print(exc)
 print(listing.count)  # observed 10000, before budget rejection

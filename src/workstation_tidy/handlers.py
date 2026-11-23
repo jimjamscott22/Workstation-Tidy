@@ -180,19 +180,7 @@ class Handler:
         for current, _, files in os.walk(path, followlinks=False):
             if "Cargo.toml" in files or "Cargo.lock" in files:
                 raise TidyError("Project files found inside build output")
-        git = shutil.which("git")
-        if not git:
-            raise TidyError("git is required to check tracked files before Cargo cleanup")
-        repo = run_command(
-            [git, "-C", str(path.parent), "rev-parse", "--show-toplevel"], cwd=path.parent
-        )
-        if repo.returncode:
-            raise TidyError("Cargo project is not in an inspectable Git repository")
-        tracked = run_command(
-            [git, "-C", str(path.parent), "ls-files", "-z", "--", "target"], cwd=path.parent
-        )
-        if tracked.returncode or tracked.stdout:
-            raise TidyError("Tracked output files or Git inspection failure; cleanup blocked")
+        self.check_untracked(path.parent, "target")
 
     def check_artifact(self, target: Target) -> None:
         path = target.path
@@ -222,18 +210,42 @@ class Handler:
             raise TidyError("Report-only target; no cleanup handler")
         self.check_untracked(parent, name)
 
-    def check_untracked(self, project: Path, folder: str) -> None:
+    def check_git_untracked(self, project: Path, folder: str) -> None:
         git = shutil.which("git")
         if not git:
-            raise TidyError("git is required to check tracked files before artifact cleanup")
-        repo = run_command([git, "-C", str(project), "rev-parse", "--show-toplevel"], cwd=project)
+            raise TidyError("git is required to check tracked files before cleanup")
+        # -C alone does not override an inherited index, repository or worktree.
+        # Ignore global/system configuration and all injected Git options while
+        # retaining repository-local config needed by ordinary linked worktrees.
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CONFIG_SYSTEM=os.devnull,
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_OPTIONAL_LOCKS="0",
+            GIT_TERMINAL_PROMPT="0",
+            GIT_LITERAL_PATHSPECS="1",
+        )
+        repo = run_command(
+            [git, "-C", str(project), "rev-parse", "--show-toplevel"], cwd=project, env=env
+        )
         if repo.returncode:
             raise TidyError("Project is not in an inspectable Git repository")
+        root = Path(repo.stdout.removesuffix("\n"))
+        try:
+            valid = root.is_absolute() and root.resolve(strict=True) == root
+        except (OSError, RuntimeError) as exc:
+            raise TidyError("Cannot verify Git worktree root; cleanup blocked") from exc
+        if not valid or not project.is_relative_to(root):
+            raise TidyError("Git worktree does not contain the project; cleanup blocked")
         tracked = run_command(
-            [git, "-C", str(project), "ls-files", "-z", "--", folder], cwd=project
+            [git, "-C", str(project), "ls-files", "-z", "--", folder], cwd=project, env=env
         )
         if tracked.returncode or tracked.stdout:
             raise TidyError("Tracked files or Git inspection failure; cleanup blocked")
+
+    def check_untracked(self, project: Path, folder: str) -> None:
+        self.check_git_untracked(project, folder)
         # ls-files only sees the parent index. A clone inside the artifact has its own
         # commits, and deleting that .git directory cannot be restored from the lockfile.
         nested = self.find_nested_git(project / folder)
@@ -252,6 +264,10 @@ class Handler:
         for current, dirs, files in os.walk(folder, followlinks=False, onerror=abort):
             if ".git" in files or ".git" in dirs:
                 return Path(current) / ".git"
+            # A bare clone stores its history directly, without a .git entry.
+            # Conservatively preserve recognizable repository layouts as well.
+            if "HEAD" in files and {"objects", "refs"} <= set(dirs):
+                return Path(current)
             kept: list[str] = []
             for name in dirs:
                 child = Path(current) / name

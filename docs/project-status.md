@@ -1,6 +1,6 @@
 # Workstation Tidy project status
 
-Updated November 13, 2026. Version 0.1.0 implements the approved user-level Python CLI design, plus project-artifact discovery.
+Updated November 17, 2026. Version 0.1.0 implements the approved user-level Python CLI design, plus project-artifact discovery.
 
 ## Implemented
 
@@ -17,7 +17,26 @@ Updated November 13, 2026. Version 0.1.0 implements the approved user-level Pyth
 - Optional Textual TUI (`workstation-tidy tui`, `tui` extra): filterable scan table with detail pane, selection by stable target ID, preflight preview, typed `CLEAN` confirmation, live per-target results, stop-after-current, doctor/history/config views and `--dry-run`. It reuses the core preflight and `service.clean`; no checks are added or bypassed.
 - Standard-library-only CLI runtime, Python 3.11+ package and console entry point; uv development environment and lockfile.
 
-## Verification
+## Review Batch 1 completed (November 17, 2026)
+
+- A1: Git inspection for both Cargo and project artifacts ignores inherited
+  `GIT_*` overrides and global/system configuration, checks the returned
+  worktree root, and blocks tracked paths or failed inspection. Nested projects
+  and linked worktrees retain their actual index protection.
+- A2: Cargo now shares the artifact handler's fail-closed nested Git traversal;
+  `.git` files/directories and recognizable bare repositories are preserved.
+  Execution repeats layout checks, including when a repository appears after
+  preflight. Unreadable descendants block authorization.
+- Current checks: 110 tests passed with no skips on Python 3.12.14 and 3.11.18,
+  including headless TUI tests and real npm/uv/pip/Cargo fixture integrations.
+  Cargo 1.91.1 was installed locally for this validation. Ruff 0.17.5 lint and
+  formatting and package build passed. An independent scoped review found no
+  remaining defects in A1/A2.
+- Mypy 2.4.1 still reports the two pre-existing C1 Textual override errors;
+  C1 is next, followed by D1, C2 and F1. No live user cleanup or native Windows
+  validation was performed. See REVIEW.md for the original findings and plan.
+
+## Historical verification (before review fixes)
 
 - 68 unittest tests passed on Python 3.14.4 (including headless Textual TUI tests), with warnings treated as errors.
 - Four real-tool fixture integrations passed: npm, uv, pip and Cargo. These only removed disposable fixture data and checked that installed dependencies, source/lockfiles, environments or retained metadata survived.

@@ -236,7 +236,7 @@ class SafetyTests(unittest.TestCase):
         (target.path / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55\n")
         (target.path.parent / "Cargo.toml").write_text('[package]\nname="test"\nversion="0.1.0"')
         replies = [
-            subprocess.CompletedProcess([], 0, "repo", ""),
+            subprocess.CompletedProcess([], 0, str(target.path.parent) + "\n", ""),
             subprocess.CompletedProcess([], 0, "target/file\0", ""),
         ]
         with (
@@ -275,7 +275,7 @@ class SafetyTests(unittest.TestCase):
         target = self.artifact()
         (target.path / "pkg.js").write_bytes(b"code")
         replies = [
-            subprocess.CompletedProcess([], 0, "repo", ""),
+            subprocess.CompletedProcess([], 0, str(target.path.parent) + "\n", ""),
             subprocess.CompletedProcess([], 0, "node_modules/pkg.js\0", ""),
         ]
         with (

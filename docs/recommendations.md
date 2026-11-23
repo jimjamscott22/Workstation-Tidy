@@ -23,7 +23,7 @@ recommendations assessment confirmed that the relevant code was still present.
 The report contains the detailed evidence and regression examples; its finding
 IDs are used here for traceability.
 
-- [ ] **1. Isolate Git inspection from inherited overrides (A1).**
+- [x] **1. Isolate Git inspection from inherited overrides (A1).**
   In `src/workstation_tidy/handlers.py`, Git guards inherit environment settings
   such as `GIT_INDEX_FILE`, `GIT_DIR`, and `GIT_WORK_TREE`. The review demonstrated
   that an alternate empty index could conceal tracked files and permit their
@@ -32,12 +32,19 @@ IDs are used here for traceability.
   repository, and worktree settings with real-Git regression tests. Both Cargo
   and project-artifact authorization must reject tracked output.
 
-- [ ] **2. Protect nested Git repositories inside Cargo output (A2).**
+- [x] **2. Protect nested Git repositories inside Cargo output (A2).**
   Cargo validation in `src/workstation_tidy/handlers.py` lacks the nested Git
   protection already applied to other artifacts. Reuse that protection before
   authorizing Cargo cleanup. Cover `.git` directories, worktree `.git` files,
   and unreadable descendants. Decide explicitly how nested bare repositories
   are handled. Run the Cargo fixture integration with Cargo installed.
+
+  Completed November 17, 2026: inherited Git overrides are isolated and checked
+  worktree roots must contain the project. Cargo and artifact checks preserve
+  nested `.git` entries and recognizable bare repositories, including checks
+  repeated immediately before execution. All 110 tests pass on Python 3.11.18
+  and 3.12.14, with no skips, including Cargo 1.91.1 fixture cleanup. C1 is the
+  next open review batch; D1/C2/F1 remain open.
 
 - [ ] **3. Restore the inherited Textual APIs (C1).**
   Rename `ScanScreen.visible()` and `action_toggle()` in
